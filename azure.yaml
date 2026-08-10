@@ -1,0 +1,11 @@
+name: ado-apim
+metadata:
+  template: ado-apim@0.2.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+requiredVersions:
+  azd: ">= 1.18.0"

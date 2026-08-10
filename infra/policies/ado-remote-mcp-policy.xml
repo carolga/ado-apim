@@ -1,0 +1,65 @@
+<policies>
+    <inbound>
+        <base />
+        <choose>
+            <when condition="@(context.Request.OriginalUrl.Scheme != &quot;https&quot;)">
+                <return-response>
+                    <set-status code="400" reason="HTTPS Required" />
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                </return-response>
+            </when>
+        </choose>
+        <set-variable name="correlation-id" value="@{
+            var supplied = context.Request.Headers.GetValueOrDefault(&quot;X-Correlation-ID&quot;, &quot;&quot;);
+            Guid parsed;
+            return Guid.TryParse(supplied, out parsed) ? parsed.ToString(&quot;D&quot;) : context.RequestId.ToString(&quot;D&quot;);
+        }" />
+        <rate-limit-by-key calls="{{ado-remote-mcp-rate-limit-calls}}" renewal-period="{{ado-remote-mcp-rate-limit-period}}"
+                           counter-key="@(&quot;ado-remote-mcp|&quot; + context.Request.IpAddress)"
+                           retry-after-header-name="Retry-After" />
+        <set-header name="X-MCP-Readonly" exists-action="override"><value>{{ado-remote-mcp-readonly}}</value></set-header>
+        <choose>
+            <when condition="@(!String.IsNullOrWhiteSpace(&quot;{{ado-remote-mcp-toolsets}}&quot;))">
+                <set-header name="X-MCP-Toolsets" exists-action="override"><value>{{ado-remote-mcp-toolsets}}</value></set-header>
+            </when>
+        </choose>
+        <set-header name="Forwarded" exists-action="delete" />
+        <set-header name="X-Forwarded-For" exists-action="delete" />
+        <set-header name="X-Forwarded-Host" exists-action="delete" />
+        <set-header name="X-Forwarded-Proto" exists-action="delete" />
+        <set-header name="X-Forwarded-Port" exists-action="delete" />
+        <set-header name="X-Original-Host" exists-action="delete" />
+        <set-header name="X-Original-URL" exists-action="delete" />
+        <set-header name="X-Rewrite-URL" exists-action="delete" />
+        <set-header name="Proxy-Authorization" exists-action="delete" />
+        <set-header name="Proxy-Connection" exists-action="delete" />
+        <set-header name="X-MS-CLIENT-PRINCIPAL" exists-action="delete" />
+        <set-header name="X-MS-CLIENT-PRINCIPAL-ID" exists-action="delete" />
+        <set-header name="X-MS-TOKEN-AAD-ACCESS-TOKEN" exists-action="delete" />
+        <set-header name="Ocp-Apim-Trace" exists-action="delete" />
+        <set-header name="Ocp-Apim-Trace-Location" exists-action="delete" />
+        <set-header name="X-Correlation-ID" exists-action="override"><value>@((string)context.Variables["correlation-id"])</value></set-header>
+    </inbound>
+    <backend>
+        <forward-request follow-redirects="false" buffer-request-body="false" buffer-response="false" />
+    </backend>
+    <outbound>
+        <base />
+        <choose>
+            <when condition="@(context.Response.StatusCode == 401)">
+                <set-header name="WWW-Authenticate" exists-action="override">
+                    <value>Bearer resource_metadata="{{ado-remote-mcp-resource-metadata-url}}"</value>
+                </set-header>
+            </when>
+        </choose>
+        <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+        <set-header name="X-Correlation-ID" exists-action="override"><value>@((string)context.Variables["correlation-id"])</value></set-header>
+    </outbound>
+    <on-error>
+        <base />
+        <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+        <set-header name="X-Correlation-ID" exists-action="override">
+            <value>@(context.Variables.GetValueOrDefault&lt;string&gt;("correlation-id", context.RequestId.ToString("D")))</value>
+        </set-header>
+    </on-error>
+</policies>

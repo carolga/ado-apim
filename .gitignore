@@ -1,0 +1,34 @@
+# Squad: ignore runtime state (logs, inbox, sessions)
+.squad/
+.copilot/
+.mcp.json
+.github/agents/squad.agent.md
+.github/workflows/squad-*.yml
+.github/workflows/sync-squad-labels.yml
+.squad/orchestration-log/
+.squad/log/
+.squad/decisions/inbox/
+.squad/sessions/
+.squad/.scratch/
+.squad/.cache/
+# Squad: SubSquad activation file (local to this machine)
+.squad-workstream
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Azure Developer CLI environment secrets and local configuration
+.azure/*/.env
+.azure/*/config.json
+
+# Sanitized compatibility evidence
+/artifacts/evidence/
+
+# Generated Bicep build output
+/infra/main.json
+
+# .NET build outputs
+**/bin/
+**/obj/

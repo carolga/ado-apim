@@ -1,0 +1,6 @@
+{
+  "apiManagementService": "apim",
+  "applicationInsights": "appi",
+  "logAnalyticsWorkspace": "log",
+  "resourceGroup": "rg"
+}

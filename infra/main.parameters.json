@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "tenantId": {
+      "value": "${AZURE_TENANT_ID}"
+    },
+    "azureDevOpsOrganization": {
+      "value": "${AZURE_DEVOPS_ORGANIZATION}"
+    },
+    "publisherName": {
+      "value": "${APIM_PUBLISHER_NAME}"
+    },
+    "publisherEmail": {
+      "value": "${APIM_PUBLISHER_EMAIL}"
+    },
+    "apimSkuName": {
+      "value": "${APIM_SKU_NAME}"
+    },
+    "apimCapacity": {
+      "value": "${APIM_CAPACITY}"
+    },
+    "rateLimitCalls": {
+      "value": "${MCP_RATE_LIMIT_CALLS}"
+    },
+    "rateLimitPeriod": {
+      "value": "${MCP_RATE_LIMIT_PERIOD}"
+    },
+    "diagnosticSamplingPercentage": {
+      "value": "${DIAGNOSTIC_SAMPLING_PERCENTAGE}"
+    },
+    "diagnosticRetentionInDays": {
+      "value": "${LOG_ANALYTICS_RETENTION_DAYS}"
+    }
+  }
+}
