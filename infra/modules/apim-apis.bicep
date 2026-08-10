@@ -117,7 +117,7 @@ resource rateLimitPeriodNamedValue 'Microsoft.ApiManagement/service/namedValues@
   }
 }
 
-resource proxyApi 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
+resource proxyApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: apim
   name: proxyApiName
   properties: {
@@ -134,7 +134,7 @@ resource proxyApi 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
   }
 }
 
-resource proxyPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-09-01-preview' = {
+resource proxyPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
   parent: proxyApi
   name: 'policy'
   properties: {
@@ -169,7 +169,7 @@ resource proxyPostOperation 'Microsoft.ApiManagement/service/apis/operations@202
   }
 }
 
-resource metadataApi 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
+resource metadataApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: apim
   name: metadataApiName
   properties: {
