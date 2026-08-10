@@ -29,7 +29,13 @@ The deployment does **not** create an application backend, app registration, cli
 
 ## VS Code configuration
 
-After deployment, use the `ADO_REMOTE_MCP_PROXY_URL` output:
+After deployment, get the APIM-hosted MCP proxy URL:
+
+```powershell
+azd env get-value ADO_REMOTE_MCP_PROXY_URL
+```
+
+Use that value in VS Code. The final configuration should look like this:
 
 ```json
 {
@@ -43,6 +49,39 @@ After deployment, use the `ADO_REMOTE_MCP_PROXY_URL` output:
 ```
 
 Do not configure a custom `oauth.clientId`. VS Code should follow the protected-resource metadata returned by APIM, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
+
+### Add the server in VS Code
+
+1. Open VS Code.
+2. Press `Ctrl+Shift+P` to open the Command Palette.
+3. Run **MCP: Open User Configuration**.
+4. Add the `azure-devops-via-apim` server entry shown above. If the file already has a `servers` object, add only the inner server entry instead of replacing the whole file.
+5. Replace `https://<apim-host>/ado-remote-mcp-proxy` with the exact `ADO_REMOTE_MCP_PROXY_URL` output.
+6. Save the file.
+7. Press `Ctrl+Shift+P` again.
+8. Run **MCP: List Servers**.
+9. Select `azure-devops-via-apim`.
+10. Choose **Start Server** or **Restart Server**.
+11. When VS Code prompts for authentication, sign in with the Microsoft Entra account that has access to the Azure DevOps organization.
+12. After sign-in completes, open GitHub Copilot Chat, switch to **Agent** mode, and open the tools picker to confirm Azure DevOps tools are available.
+
+### Test prompts
+
+Try simple read-only prompts first:
+
+```text
+List the Azure DevOps projects I can access.
+```
+
+```text
+Show my assigned work items.
+```
+
+```text
+What pull requests require my review?
+```
+
+If tools do not appear, run **MCP: List Servers**, restart `azure-devops-via-apim`, and reload the VS Code window. This clears stale MCP auth discovery state from earlier configurations.
 
 ## Configuration
 
