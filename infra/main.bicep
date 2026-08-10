@@ -7,10 +7,11 @@ param environmentName string
 
 @description('Azure region for all resources.')
 @allowed([
+  'centralus'
   'westus3'
   'canadacentral'
 ])
-param location string = 'westus3'
+param location string = 'centralus'
 
 @description('Additional non-sensitive tags applied to resources.')
 param tags object = {}

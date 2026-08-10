@@ -88,7 +88,7 @@ If tools do not appear, run **MCP: List Servers**, restart `azure-devops-via-api
 Required azd values:
 
 ```powershell
-azd env set AZURE_LOCATION westus3
+azd env set AZURE_LOCATION centralus
 azd env set AZURE_TENANT_ID <tenant-id>
 azd env set AZURE_DEVOPS_ORGANIZATION <organization-name>
 azd env set APIM_PUBLISHER_NAME <publisher-name>
@@ -107,6 +107,28 @@ Optional Bicep parameters:
 |---|---:|---|
 | `hostedAdoMcpReadOnly` | `true` | Sends `X-MCP-Readonly: true` to Azure DevOps |
 | `hostedAdoMcpToolsets` | `all` | Sends `X-MCP-Toolsets` to Azure DevOps |
+
+## Cost estimate
+
+The table below assumes **Central US** (`centralus` / US Central), one APIM unit, 730 hours per month, USD retail pricing, and the default deployment shape in this repository. Actual cost can vary by discounts, commitment plans, traffic, telemetry volume, retention, taxes, and future Azure price changes.
+
+| Resource | Default in this repo | Central US retail meter used | Approx monthly cost |
+|---|---:|---:|---:|
+| API Management Developer | Yes | `$0.0658/hour` | `$48.03/month` |
+| Log Analytics ingestion | Usage-based | `$0` for the initial tier shown by the retail API, then `$2.76/GB` above that tier | Depends on GB ingested |
+| Log Analytics retention | 30 days | Included for the default 30-day retention used here | `$0` for default retention |
+| Application Insights | Workspace-based | Data is billed through Log Analytics ingestion/retention | Depends on telemetry volume |
+
+For quick planning:
+
+| APIM SKU option | Central US hourly rate | Approx monthly cost at 730 hours | Notes |
+|---|---:|---:|---|
+| Developer | `$0.0658/hour` | `$48.03/month` | Lowest-cost test/dev option; not intended for production SLA. |
+| Basic v2 | `$0.20548/hour` | `$150.00/month` | Lower-cost managed gateway option for small workloads. |
+| Standard v2 | `$0.9589/hour` | `$700.00/month` | More appropriate production starting point for many internal deployments. |
+| Premium v2 | `$3.83562/hour` | `$2,800.00/month` | Higher isolation/scale option. |
+
+This proxy has no application backend compute cost because it does not deploy a web app, container app, function app, registry, database, or queue. The dominant fixed cost is APIM. The variable cost is usually observability data volume.
 
 ## Deploy
 
