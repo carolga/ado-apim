@@ -47,7 +47,7 @@ Use that value in VS Code. The final configuration should look like this:
 }
 ```
 
-Do not configure `oauth.clientId` for this proxy. The clean path is for APIM to preserve the hosted Azure DevOps MCP authentication challenge so VS Code discovers the hosted Azure DevOps MCP resource metadata directly, requests a token for `https://mcp.dev.azure.com/.default`, and sends that delegated user token through APIM to Azure DevOps.
+Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns VS Code's published native-client identifier during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. APIM still forwards the resulting delegated user token unchanged to Azure DevOps.
 
 ### Why this is an APIM HTTP API, not an APIM MCP server
 
@@ -92,10 +92,10 @@ If tools do not appear, run **MCP: List Servers**, restart `ado-mcp-apim-proxy`,
 
 ### Troubleshoot stale OAuth discovery
 
-If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry. The current proxy should preserve the hosted Azure DevOps MCP challenge:
+If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry or the `/register` operation has not been deployed. The current proxy should challenge with APIM-hosted resource metadata:
 
 ```text
-WWW-Authenticate: Bearer resource_metadata="https://mcp.dev.azure.com/.well-known/oauth-protected-resource/<organization>"
+WWW-Authenticate: Bearer resource_metadata="https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy"
 ```
 
 Use this reset sequence:
@@ -110,7 +110,7 @@ Use this reset sequence:
 8. Run **Developer: Reload Window**.
 9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
 
-Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the hosted Azure DevOps MCP resource metadata, so it should not ask you to register an APIM-root client.
+Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses APIM's `/register` compatibility response and should not require manual client registration.
 
 #### Where VS Code stores stale MCP auth state
 
@@ -209,9 +209,9 @@ Invoke-WebRequest `
   -SkipHttpErrorCheck
 ```
 
-The `WWW-Authenticate` response should point at:
+The `WWW-Authenticate` response should point at the APIM-hosted resource metadata:
 
-- `https://mcp.dev.azure.com/.well-known/oauth-protected-resource/<organization>`
+- `https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy`
 
 ## Policy reference
 
@@ -265,12 +265,30 @@ This policy is attached to the `/ado-remote-mcp-proxy` API. It governs calls to 
 | 45 | `</backend>` | Ends backend forwarding behavior. |
 | 46 | `<outbound>` | Starts response-side processing after Azure DevOps responds. |
 | 47 | `<base />` | Preserves inherited outbound policies. |
-| 48 | `Cache-Control: no-store` | Prevents caching of MCP responses and authentication challenges. The hosted Azure DevOps `WWW-Authenticate` challenge is intentionally preserved unchanged. |
-| 49 | Set `X-Correlation-ID` | Echoes the normalized correlation ID on successful and error responses. |
-| 50 | `</outbound>` | Ends response-side processing. |
-| 51 | `<on-error>` | Starts policy logic for APIM-side failures. |
-| 52 | `<base />` | Preserves inherited error handling. |
-| 53 | `Cache-Control: no-store` | Prevents APIM-generated errors from being cached. |
-| 54-56 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
-| 57 | `</on-error>` | Ends APIM error handling. |
-| 58 | `</policies>` | Ends the APIM policy document. |
+| 48-54 | 401 challenge rewrite | Points VS Code to APIM-hosted protected-resource metadata for this proxy. This is required because VS Code performs OAuth discovery against the APIM hostname when the MCP server URL is an APIM URL. |
+| 55 | `Cache-Control: no-store` | Prevents caching of MCP responses and authentication challenges. |
+| 56 | Set `X-Correlation-ID` | Echoes the normalized correlation ID on successful and error responses. |
+| 57 | `</outbound>` | Ends response-side processing. |
+| 58 | `<on-error>` | Starts policy logic for APIM-side failures. |
+| 59 | `<base />` | Preserves inherited error handling. |
+| 60 | `Cache-Control: no-store` | Prevents APIM-generated errors from being cached. |
+| 61-63 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
+| 64 | `</on-error>` | Ends APIM error handling. |
+| 65 | `</policies>` | Ends the APIM policy document. |
+
+### `infra/policies/ado-remote-mcp-oauth-policy.xml`
+
+This policy is attached to the APIM root metadata and OAuth compatibility operations. It exists because VS Code treats the APIM origin as the MCP authorization server when the MCP server URL is hosted behind APIM.
+
+| Line(s) | Policy | Why it is needed |
+|---:|---|---|
+| 1 | `<policies>` | Root APIM policy document element. |
+| 2 | `<inbound>` | Handles metadata, registration, authorization, and token requests before APIM routes to a backend. |
+| 3 | `<choose>` | Dispatches behavior based on the requested OAuth path. |
+| 4-16 | Protected-resource metadata branch | Returns metadata for `/ado-remote-mcp-proxy`, advertising the hosted Azure DevOps MCP resource and APIM as the authorization server facade. |
+| 17-34 | Authorization-server metadata branch | Returns RFC-style authorization server metadata, including `/authorize`, `/token`, `/register`, PKCE support, and public-client auth mode. |
+| 35-50 | Dynamic Client Registration branch | Returns VS Code's published native client identifier and redirect URIs so VS Code does not require manual client registration. |
+| 51-73 | Authorization redirect branch | Redirects browser sign-in to the tenant-specific Microsoft Entra authorize endpoint, preserving VS Code's PKCE/state parameters and adding the hosted Azure DevOps MCP scope/resource when missing. |
+| 74-91 | Token exchange branch | Forwards the authorization-code token exchange to the tenant-specific Microsoft Entra token endpoint, again ensuring the hosted Azure DevOps MCP scope/resource are present. |
+| 92-97 | Default 404 branch | Rejects any unexpected path on the OAuth facade. |
+| 100-102 | Backend/outbound/error sections | Required APIM policy sections; backend forwarding is only used by the `/token` branch after it rewrites the backend to Microsoft Entra. |

@@ -1,0 +1,103 @@
+<policies>
+    <inbound>
+        <choose>
+            <when condition="@(context.Request.OriginalUrl.Path.EndsWith(&quot;/.well-known/oauth-protected-resource/ado-remote-mcp-proxy&quot;, StringComparison.OrdinalIgnoreCase))">
+                <return-response>
+                    <set-status code="200" reason="OK" />
+                    <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                    <set-body>{
+  "resource": "{{ado-remote-mcp-resource-url}}",
+  "authorization_servers": ["{{ado-remote-mcp-authorization-server}}"],
+  "bearer_methods_supported": ["header"],
+  "scopes_supported": ["https://mcp.dev.azure.com/.default"]
+}</set-body>
+                </return-response>
+            </when>
+            <when condition="@(context.Request.OriginalUrl.Path.EndsWith(&quot;/.well-known/oauth-authorization-server&quot;, StringComparison.OrdinalIgnoreCase))">
+                <return-response>
+                    <set-status code="200" reason="OK" />
+                    <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                    <set-body>{
+  "issuer": "{{ado-remote-mcp-authorization-server}}",
+  "authorization_endpoint": "{{ado-remote-mcp-authorization-server}}/authorize",
+  "token_endpoint": "{{ado-remote-mcp-authorization-server}}/token",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "code_challenge_methods_supported": ["S256"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "registration_endpoint": "{{ado-remote-mcp-authorization-server}}/register",
+  "scopes_supported": ["https://mcp.dev.azure.com/.default"]
+}</set-body>
+                </return-response>
+            </when>
+            <when condition="@(context.Request.OriginalUrl.Path.EndsWith(&quot;/register&quot;, StringComparison.OrdinalIgnoreCase))">
+                <return-response>
+                    <set-status code="201" reason="Created" />
+                    <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                    <set-body>{
+  "client_id": "https://vscode.dev/oauth/client-metadata.json",
+  "client_name": "Visual Studio Code",
+  "application_type": "native",
+  "redirect_uris": ["http://127.0.0.1:33418/", "https://vscode.dev/redirect"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none"
+}</set-body>
+                </return-response>
+            </when>
+            <when condition="@(context.Request.OriginalUrl.Path.EndsWith(&quot;/authorize&quot;, StringComparison.OrdinalIgnoreCase))">
+                <set-variable name="entra-authorization-query" value="@{
+                    var query = context.Request.OriginalUrl.QueryString.TrimStart('?');
+                    var retained = new System.Collections.Generic.List&lt;string&gt;();
+                    var hasScope = false;
+                    var hasResource = false;
+                    foreach (var parameter in query.Split('&amp;')) {
+                        if (parameter.StartsWith(&quot;scope=&quot;, StringComparison.OrdinalIgnoreCase)) { hasScope = true; }
+                        if (parameter.StartsWith(&quot;resource=&quot;, StringComparison.OrdinalIgnoreCase)) { hasResource = true; }
+                        retained.Add(parameter);
+                    }
+                    if (!hasScope) { retained.Add(&quot;scope=https%3A%2F%2Fmcp.dev.azure.com%2F.default&quot;); }
+                    if (!hasResource) { retained.Add(&quot;resource=&quot; + System.Uri.EscapeDataString(&quot;{{ado-remote-mcp-resource-url}}&quot;)); }
+                    return retained.Count == 0 ? String.Empty : &quot;?&quot; + String.Join(&quot;&amp;&quot;, retained);
+                }" />
+                <return-response>
+                    <set-status code="302" reason="Found" />
+                    <set-header name="Location" exists-action="override">
+                        <value>@("https://login.microsoftonline.com/{{ado-remote-mcp-tenant-id}}/oauth2/v2.0/authorize" + (string)context.Variables["entra-authorization-query"])</value>
+                    </set-header>
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                </return-response>
+            </when>
+            <when condition="@(context.Request.OriginalUrl.Path.EndsWith(&quot;/token&quot;, StringComparison.OrdinalIgnoreCase))">
+                <set-body>@{
+                    var form = context.Request.Body.As&lt;string&gt;(preserveContent: true);
+                    var retained = new System.Collections.Generic.List&lt;string&gt;();
+                    var hasScope = false;
+                    var hasResource = false;
+                    foreach (var parameter in form.Split('&amp;')) {
+                        if (parameter.StartsWith(&quot;scope=&quot;, StringComparison.OrdinalIgnoreCase)) { hasScope = true; }
+                        if (parameter.StartsWith(&quot;resource=&quot;, StringComparison.OrdinalIgnoreCase)) { hasResource = true; }
+                        retained.Add(parameter);
+                    }
+                    if (!hasScope) { retained.Add(&quot;scope=https%3A%2F%2Fmcp.dev.azure.com%2F.default&quot;); }
+                    if (!hasResource) { retained.Add(&quot;resource=&quot; + System.Uri.EscapeDataString(&quot;{{ado-remote-mcp-resource-url}}&quot;)); }
+                    return String.Join(&quot;&amp;&quot;, retained);
+                }</set-body>
+                <set-backend-service base-url="https://login.microsoftonline.com" />
+                <rewrite-uri template="/{{ado-remote-mcp-tenant-id}}/oauth2/v2.0/token" copy-unmatched-params="false" />
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="404" reason="Not Found" />
+                    <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
+                </return-response>
+            </otherwise>
+        </choose>
+    </inbound>
+    <backend><forward-request /></backend>
+    <outbound><base /></outbound>
+    <on-error><base /></on-error>
+</policies>

@@ -16,6 +16,9 @@ param location string = 'centralus'
 @description('Additional non-sensitive tags applied to resources.')
 param tags object = {}
 
+@description('Microsoft Entra tenant used by the Azure DevOps organization.')
+param tenantId string
+
 @description('Azure DevOps organization name as one URL-safe path segment, not a URL.')
 @minLength(1)
 @maxLength(64)
@@ -119,6 +122,7 @@ module adoMcpProxy './modules/apim-apis.bicep' = {
     apimName: apim.outputs.name
     gatewayUrl: apim.outputs.gatewayUrl
     loggerId: apim.outputs.loggerId
+    tenantId: tenantId
     azureDevOpsOrganization: validatedOrganizationName
     hostedAdoMcpToolsets: hostedAdoMcpToolsets
     hostedAdoMcpReadOnly: hostedAdoMcpReadOnly
