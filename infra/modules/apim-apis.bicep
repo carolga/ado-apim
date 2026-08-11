@@ -41,6 +41,7 @@ var proxyApiName = 'ado-remote-mcp-proxy'
 var proxyPath = 'ado-remote-mcp-proxy'
 var oauthApiName = 'ado-remote-mcp-oauth'
 var backendUrl = 'https://mcp.dev.azure.com/${azureDevOpsOrganization}'
+var oauthResourceUrl = 'https://mcp.dev.azure.com'
 var metadataUrl = '${gatewayUrl}/.well-known/oauth-protected-resource/${proxyPath}'
 var authorizationServerUrl = gatewayUrl
 
@@ -84,7 +85,7 @@ resource resourceUrlNamedValue 'Microsoft.ApiManagement/service/namedValues@2024
   properties: {
     displayName: 'ado-remote-mcp-resource-url'
     secret: false
-    value: backendUrl
+    value: oauthResourceUrl
   }
 }
 
