@@ -40,7 +40,7 @@ Use that value in VS Code. The final configuration should look like this:
 ```json
 {
   "servers": {
-    "azure-devops-via-apim": {
+    "ado-mcp-apim-proxy": {
       "type": "http",
       "url": "https://<apim-host>/ado-remote-mcp-proxy"
     }
@@ -55,12 +55,12 @@ Do not configure a custom `oauth.clientId`. VS Code should follow the protected-
 1. Open VS Code.
 2. Press `Ctrl+Shift+P` to open the Command Palette.
 3. Run **MCP: Open User Configuration**.
-4. Add the `azure-devops-via-apim` server entry shown above. If the file already has a `servers` object, add only the inner server entry instead of replacing the whole file.
+4. Add the `ado-mcp-apim-proxy` server entry shown above. If the file already has a `servers` object, add only the inner server entry instead of replacing the whole file.
 5. Replace `https://<apim-host>/ado-remote-mcp-proxy` with the exact `ADO_REMOTE_MCP_PROXY_URL` output.
 6. Save the file.
 7. Press `Ctrl+Shift+P` again.
 8. Run **MCP: List Servers**.
-9. Select `azure-devops-via-apim`.
+9. Select `ado-mcp-apim-proxy`.
 10. Choose **Start Server** or **Restart Server**.
 11. When VS Code prompts for authentication, sign in with the Microsoft Entra account that has access to the Azure DevOps organization.
 12. After sign-in completes, open GitHub Copilot Chat, switch to **Agent** mode, and open the tools picker to confirm Azure DevOps tools are available.
@@ -81,7 +81,29 @@ Show my assigned work items.
 What pull requests require my review?
 ```
 
-If tools do not appear, run **MCP: List Servers**, restart `azure-devops-via-apim`, and reload the VS Code window. This clears stale MCP auth discovery state from earlier configurations.
+If tools do not appear, run **MCP: List Servers**, restart `ado-mcp-apim-proxy`, and reload the VS Code window.
+
+### Troubleshoot stale OAuth discovery
+
+If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry. The current proxy should challenge with:
+
+```text
+WWW-Authenticate: Bearer resource_metadata="https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy"
+```
+
+Use this reset sequence:
+
+1. Select **Cancel** in the Dynamic Client Registration dialog.
+2. Press `Ctrl+Shift+P`.
+3. Run **MCP: List Servers**.
+4. Stop or disable any old MCP entries for the same APIM host.
+5. Run **MCP: Reset Trust**.
+6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host.
+7. Rename the server ID if needed, for example from `azure-devops-hosted-via-apim` to `ado-mcp-apim-proxy`, so VS Code treats it as a new MCP server.
+8. Run **Developer: Reload Window**.
+9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
+
+Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the hosted Azure DevOps MCP resource metadata and should not ask you to register an APIM-root client.
 
 ## Configuration
 
