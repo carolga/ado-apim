@@ -69,6 +69,9 @@ param hostedAdoMcpToolsets string = 'all'
 @description('Whether APIM asks the hosted Azure DevOps MCP server to expose read-only tools only.')
 param hostedAdoMcpReadOnly bool = true
 
+@description('Public OAuth client ID returned by APIM dynamic client registration for VS Code.')
+param vscodeOAuthClientId string = 'aebc6443-996d-45c2-90f0-388ff96faa56'
+
 var resourceToken = take(uniqueString(subscription().id, environmentName, location, 'ado-mcp-v2'), 10)
 var resourceBase = 'v2-${resourceToken}'
 var resourceGroupName = 'rg-ado-mcp-${resourceBase}'
@@ -126,6 +129,7 @@ module adoMcpProxy './modules/apim-apis.bicep' = {
     azureDevOpsOrganization: validatedOrganizationName
     hostedAdoMcpToolsets: hostedAdoMcpToolsets
     hostedAdoMcpReadOnly: hostedAdoMcpReadOnly
+    vscodeOAuthClientId: vscodeOAuthClientId
     rateLimitCalls: rateLimitCalls
     rateLimitPeriod: rateLimitPeriod
     diagnosticSamplingPercentage: diagnosticSamplingPercentage

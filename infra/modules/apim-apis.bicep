@@ -24,6 +24,9 @@ param hostedAdoMcpToolsets string = 'all'
 @description('Whether APIM asks the hosted Azure DevOps MCP server to expose read-only tools only.')
 param hostedAdoMcpReadOnly bool = true
 
+@description('Public OAuth client ID returned by APIM dynamic client registration for VS Code.')
+param vscodeOAuthClientId string = 'aebc6443-996d-45c2-90f0-388ff96faa56'
+
 @description('Maximum accepted calls in each rate-limit period.')
 @minValue(1)
 param rateLimitCalls int = 60
@@ -106,6 +109,16 @@ resource authorizationServerNamedValue 'Microsoft.ApiManagement/service/namedVal
     displayName: 'ado-remote-mcp-authorization-server'
     secret: false
     value: authorizationServerUrl
+  }
+}
+
+resource vscodeOAuthClientIdNamedValue 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  parent: apim
+  name: 'ado-remote-mcp-vscode-oauth-client-id'
+  properties: {
+    displayName: 'ado-remote-mcp-vscode-oauth-client-id'
+    secret: false
+    value: vscodeOAuthClientId
   }
 }
 
@@ -286,6 +299,7 @@ resource protectedResourceMetadataPolicy 'Microsoft.ApiManagement/service/apis/o
     authorizationServerNamedValue
     resourceUrlNamedValue
     tenantNamedValue
+    vscodeOAuthClientIdNamedValue
   ]
 }
 
@@ -300,6 +314,7 @@ resource authorizationServerMetadataPolicy 'Microsoft.ApiManagement/service/apis
     authorizationServerNamedValue
     resourceUrlNamedValue
     tenantNamedValue
+    vscodeOAuthClientIdNamedValue
   ]
 }
 
@@ -314,6 +329,7 @@ resource authorizePolicy 'Microsoft.ApiManagement/service/apis/operations/polici
     authorizationServerNamedValue
     resourceUrlNamedValue
     tenantNamedValue
+    vscodeOAuthClientIdNamedValue
   ]
 }
 
@@ -328,6 +344,7 @@ resource tokenPolicy 'Microsoft.ApiManagement/service/apis/operations/policies@2
     authorizationServerNamedValue
     resourceUrlNamedValue
     tenantNamedValue
+    vscodeOAuthClientIdNamedValue
   ]
 }
 
@@ -342,6 +359,7 @@ resource registerPolicy 'Microsoft.ApiManagement/service/apis/operations/policie
     authorizationServerNamedValue
     resourceUrlNamedValue
     tenantNamedValue
+    vscodeOAuthClientIdNamedValue
   ]
 }
 

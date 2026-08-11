@@ -47,7 +47,7 @@ Use that value in VS Code. The final configuration should look like this:
 }
 ```
 
-Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns VS Code's published native-client identifier during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
+Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns a real VS Code public OAuth client ID during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
 
 ### Why this is an APIM HTTP API, not an APIM MCP server
 

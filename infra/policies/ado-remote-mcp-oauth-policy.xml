@@ -38,7 +38,7 @@
                     <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
                     <set-header name="Cache-Control" exists-action="override"><value>no-store</value></set-header>
                     <set-body>{
-  "client_id": "https://vscode.dev/oauth/client-metadata.json",
+  "client_id": "{{ado-remote-mcp-vscode-oauth-client-id}}",
   "client_name": "Visual Studio Code",
   "application_type": "native",
   "redirect_uris": ["http://127.0.0.1:33418/", "https://vscode.dev/redirect"],
