@@ -112,6 +112,35 @@ Use this reset sequence:
 
 Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the hosted Azure DevOps MCP resource metadata, so it should not ask you to register an APIM-root client.
 
+#### Where VS Code stores stale MCP auth state
+
+VS Code persists MCP trust, dynamic OAuth providers, client registrations, and per-workspace MCP usage in SQLite state databases under the user profile:
+
+```text
+%APPDATA%\Code\User\globalStorage\state.vscdb
+%APPDATA%\Code\User\workspaceStorage\<workspace-id>\state.vscdb
+```
+
+On this machine those expand to paths like:
+
+```text
+C:\Users\<user>\AppData\Roaming\Code\User\globalStorage\state.vscdb
+C:\Users\<user>\AppData\Roaming\Code\User\workspaceStorage\<workspace-id>\state.vscdb
+```
+
+The stale rows we found were in the `ItemTable` table. Relevant keys/prefixes included:
+
+```text
+dynamicAuthProviders
+secret://dynamicAuthProvider:clientRegistration:<authorization-server> <mcp-server-url>
+secret://{"isDynamicAuthProvider":true,...}
+mcpserver-<authorization-server> <mcp-server-url>-<account>
+mcp.config.<scope>.<server-name>-<authorization-server> <mcp-server-url>
+<authorization-server> <mcp-server-url>-<account>-mcpserver-usages
+```
+
+If Command Palette reset steps do not clear the issue, close VS Code fully, back up the `state.vscdb` files, and remove only rows containing the affected APIM hostname. Do not delete unrelated rows unless you are intentionally resetting broader VS Code state.
+
 ## Configuration
 
 Required azd values:
