@@ -41,16 +41,21 @@ Use that value in VS Code. The final configuration should look like this:
   "servers": {
     "ado-mcp-apim-proxy": {
       "type": "http",
-      "url": "https://<apim-host>/ado-remote-mcp-proxy",
-      "oauth": {
-        "clientId": "https://vscode.dev/oauth/client-metadata.json"
-      }
+      "url": "https://<apim-host>/ado-remote-mcp-proxy"
     }
   }
 }
 ```
 
-The `oauth.clientId` value is VS Code's published native-client identifier. It avoids Dynamic Client Registration when the hosted Azure DevOps MCP endpoint is reached through an APIM hostname. VS Code should follow the protected-resource metadata returned by the hosted Azure DevOps MCP endpoint, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
+Do not configure `oauth.clientId` for this proxy. The clean path is for APIM to preserve the hosted Azure DevOps MCP authentication challenge so VS Code discovers the hosted Azure DevOps MCP resource metadata directly, requests a token for `https://mcp.dev.azure.com/.default`, and sends that delegated user token through APIM to Azure DevOps.
+
+### Why this is an APIM HTTP API, not an APIM MCP server
+
+APIM is intentionally hosting this as a plain HTTP API proxy at `/ado-remote-mcp-proxy`.
+
+The backend is already a complete remote MCP server hosted by Azure DevOps. The goal is to preserve that server's MCP protocol behavior, authentication challenge, sessions, streaming behavior, tool discovery, and user-token validation. A plain APIM HTTP API can forward the MCP JSON-RPC traffic and the hosted Azure DevOps `WWW-Authenticate` challenge without trying to reinterpret the MCP protocol.
+
+APIM's MCP server resource type is useful when APIM is generating an MCP surface from REST operations, or when the APIM MCP passthrough behavior fully preserves the upstream server's auth and tool catalog. In this test, the APIM MCP resource path did not preserve the hosted Azure DevOps behavior correctly, so the repo uses the simpler HTTP proxy shape.
 
 ### Add the server in VS Code
 
@@ -100,7 +105,7 @@ Use this reset sequence:
 3. Run **MCP: List Servers**.
 4. Stop or disable any old MCP entries for the same APIM host.
 5. Run **MCP: Reset Trust**.
-6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host, including the `oauth.clientId` shown above.
+6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host. Remove any `oauth` block from this server entry.
 7. Rename the server ID if needed, for example from `azure-devops-hosted-via-apim` to `ado-mcp-apim-proxy`, so VS Code treats it as a new MCP server.
 8. Run **Developer: Reload Window**.
 9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
