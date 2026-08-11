@@ -188,7 +188,9 @@ Expected path:
 https://<apim-host>/ado-remote-mcp-experiment/mcp
 ```
 
-Use this for comparison testing. The endpoint has been verified to return `serverInfo.name = AzureDevOps.Mcp` and a non-empty hosted Azure DevOps MCP tool catalog when called with a valid delegated token.
+Use this for comparison testing only. The endpoint has been verified to return `serverInfo.name = AzureDevOps.Mcp` and a non-empty hosted Azure DevOps MCP tool catalog when called with a valid delegated token, but it is not a viable VS Code endpoint for Azure DevOps MCP today.
+
+Known limitation: APIM native MCP passthrough can list hosted Azure DevOps MCP tools but fails real tool invocation. For example, `tools/call` for `core_list_projects` returns `VS30063: You are not authorized to access https://dev.azure.com.` The same delegated token succeeds against direct hosted Azure DevOps MCP and through the APIM HTTP proxy. The public `microsoft/azure-devops-mcp` repo confirms why this matters: tool calls create authenticated Azure DevOps REST clients or direct REST requests at invocation time, so runtime bearer-token preservation is required beyond `initialize` and `tools/list`. Until APIM native MCP preserves those delegated-token semantics end to end for hosted Azure DevOps MCP, use the HTTP proxy endpoint instead.
 
 ### Compare direct ADO MCP, APIM HTTP proxy, and APIM MCP experiment
 
@@ -290,9 +292,9 @@ Expected result:
 
 | Endpoint | Expected behavior |
 |---|---|
-| Direct hosted Azure DevOps MCP | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
-| APIM HTTP proxy | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
-| APIM MCP experiment | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools when configured with an APIM backend connection |
+| Direct hosted Azure DevOps MCP | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools; real tool calls succeed with a valid delegated token |
+| APIM HTTP proxy | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools; real tool calls succeed with the same delegated token |
+| APIM MCP experiment | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools when configured with an APIM backend connection, but real tool calls fail with `VS30063` and this endpoint should not be used for VS Code |
 
 ### Add the server in VS Code
 
