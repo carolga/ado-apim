@@ -26,6 +26,103 @@ APIM acts as a governed HTTP proxy for the GA hosted Azure DevOps MCP endpoint a
 
 The deployment does **not** create an application backend, app registration, client credential, or shared service caller.
 
+## Microsoft Entra requirements
+
+This APIM proxy uses the hosted Azure DevOps MCP OAuth resource. VS Code discovers APIM as the authorization server facade, APIM performs Dynamic Client Registration compatibility, and Microsoft Entra issues a delegated user token for Azure DevOps MCP.
+
+You need two Entra objects configured before users can sign in successfully.
+
+### 1. Azure DevOps MCP enterprise application
+
+The tenant must contain the **Azure DevOps MCP** enterprise application:
+
+```text
+Application ID: 2a72489c-aab2-4b65-b93a-a91edccf33b8
+Display name: Azure DevOps MCP
+```
+
+If it is missing, a tenant administrator with Application Administrator, Cloud Application Administrator, or Global Administrator permissions can create the service principal:
+
+```powershell
+az login --tenant <tenant-id> --allow-no-subscriptions
+az ad sp create --id 2a72489c-aab2-4b65-b93a-a91edccf33b8
+```
+
+Verify it exists:
+
+```powershell
+az ad sp show --id 2a72489c-aab2-4b65-b93a-a91edccf33b8 `
+  --query "{appId:appId,displayName:displayName,accountEnabled:accountEnabled}"
+```
+
+Expected values:
+
+```json
+{
+  "appId": "2a72489c-aab2-4b65-b93a-a91edccf33b8",
+  "displayName": "Azure DevOps MCP",
+  "accountEnabled": true
+}
+```
+
+### 2. VS Code public client application
+
+APIM returns this public client ID from its `/register` compatibility endpoint. Configure the value through `VS_CODE_PUBLIC_CLIENT_ID`.
+
+The app registration must be a public/native client and must include these redirect URIs:
+
+```text
+http://127.0.0.1:33418/
+https://vscode.dev/redirect
+```
+
+The app registration must also request delegated access to the **Azure DevOps MCP** resource:
+
+```text
+Resource app ID: 2a72489c-aab2-4b65-b93a-a91edccf33b8
+Delegated permission: Ado.Mcp.Tools
+Permission ID: f8dac17a-2c07-463d-a820-8956dc52dfb5
+```
+
+Example CLI setup for an existing public client app:
+
+```powershell
+$clientAppId = "<VS_CODE_PUBLIC_CLIENT_ID>"
+$resourceAppId = "2a72489c-aab2-4b65-b93a-a91edccf33b8"
+$scopeId = "f8dac17a-2c07-463d-a820-8956dc52dfb5"
+
+$app = az ad app show --id $clientAppId | ConvertFrom-Json
+$required = @($app.requiredResourceAccess)
+
+$required = @($required | Where-Object { $_.resourceAppId -ne $resourceAppId })
+$required += [pscustomobject]@{
+  resourceAppId = $resourceAppId
+  resourceAccess = @(
+    [pscustomobject]@{
+      id = $scopeId
+      type = "Scope"
+    }
+  )
+}
+
+$path = Join-Path $env:TEMP "ado-mcp-required-resource-access.json"
+$required | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path -Encoding utf8
+az ad app update --id $clientAppId --required-resource-accesses "@$path"
+```
+
+Grant admin consent if tenant policy requires it:
+
+```powershell
+az ad app permission admin-consent --id <VS_CODE_PUBLIC_CLIENT_ID>
+```
+
+Verify the public client redirects:
+
+```powershell
+az ad app show --id <VS_CODE_PUBLIC_CLIENT_ID> `
+  --query "{appId:appId,displayName:displayName,publicClient:publicClient}"
+```
+
 ## VS Code configuration
 
 After deployment, get the APIM-hosted MCP proxy URL:
@@ -148,6 +245,8 @@ Required azd values:
 ```powershell
 azd env set AZURE_LOCATION centralus
 azd env set AZURE_DEVOPS_ORGANIZATION <organization-name>
+azd env set AZURE_TENANT_ID <tenant-id>
+azd env set VS_CODE_PUBLIC_CLIENT_ID <public-client-app-id>
 azd env set APIM_PUBLISHER_NAME <publisher-name>
 azd env set APIM_PUBLISHER_EMAIL <publisher-email>
 azd env set APIM_SKU_NAME Developer
