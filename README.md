@@ -47,7 +47,7 @@ Use that value in VS Code. The final configuration should look like this:
 }
 ```
 
-Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns a real VS Code public OAuth client ID during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
+Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns the configured `VS_CODE_PUBLIC_CLIENT_ID` during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. That public-client app must include the VS Code redirect URIs `http://127.0.0.1:33418/` and `https://vscode.dev/redirect`. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
 
 ### Why this is an APIM HTTP API, not an APIM MCP server
 
@@ -287,7 +287,7 @@ This policy is attached to the APIM root metadata and OAuth compatibility operat
 | 3 | `<choose>` | Dispatches behavior based on the requested OAuth path. |
 | 4-16 | Protected-resource metadata branch | Returns metadata for `/ado-remote-mcp-proxy`, advertising the hosted Azure DevOps MCP resource and APIM as the authorization server facade. |
 | 17-34 | Authorization-server metadata branch | Returns RFC-style authorization server metadata, including `/authorize`, `/token`, `/register`, PKCE support, and public-client auth mode. |
-| 35-50 | Dynamic Client Registration branch | Returns VS Code's published native client identifier and redirect URIs so VS Code does not require manual client registration. |
+| 35-50 | Dynamic Client Registration branch | Returns the configured tenant public-client ID and VS Code redirect URIs so VS Code does not require manual client registration. |
 | 51-73 | Authorization redirect branch | Redirects browser sign-in to the tenant-specific Microsoft Entra authorize endpoint, preserving VS Code's PKCE/state parameters and adding the hosted Azure DevOps MCP scope/resource when missing. |
 | 74-91 | Token exchange branch | Forwards the authorization-code token exchange to the tenant-specific Microsoft Entra token endpoint, again ensuring the hosted Azure DevOps MCP scope/resource are present. |
 | 92-97 | Default 404 branch | Rejects any unexpected path on the OAuth facade. |
