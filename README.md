@@ -41,6 +41,8 @@ Application ID: 2a72489c-aab2-4b65-b93a-a91edccf33b8
 Display name: Azure DevOps MCP
 ```
 
+Microsoft documents this enterprise app ID in the [remote Azure DevOps MCP Server troubleshooting guide](https://learn.microsoft.com/azure/devops/mcp-server/remote-mcp-server-troubleshooting?view=azure-devops#cant-find-the-azure-devops-mcp-enterprise-application-in-the-tenant).
+
 If it is missing, a tenant administrator with Application Administrator, Cloud Application Administrator, or Global Administrator permissions can create the service principal:
 
 ```powershell
@@ -160,6 +162,22 @@ The HTTP API proxy keeps APIM in the gateway role:
 - Azure DevOps MCP still owns tool behavior, token validation, user authorization, and audit semantics.
 
 If APIM's existing-MCP passthrough later preserves the hosted Azure DevOps MCP auth and tool catalog end-to-end, this repo should be simplified to use the APIM MCP resource type. Until then, the HTTP API proxy is the working and most transparent implementation.
+
+### Experimental APIM MCP passthrough endpoint
+
+The deployment also includes an experimental APIM MCP passthrough endpoint so you can test the product-native shape side by side:
+
+```powershell
+azd env get-value ADO_REMOTE_MCP_EXPERIMENT_URL
+```
+
+Expected path:
+
+```text
+https://<apim-host>/ado-remote-mcp-experiment/mcp
+```
+
+Use this only for comparison testing. Keep `ADO_REMOTE_MCP_PROXY_URL` as the known-good endpoint unless the experimental MCP endpoint proves that authentication, tool discovery, sessions, and tool calls all work end-to-end.
 
 ### Add the server in VS Code
 

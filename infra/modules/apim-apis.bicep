@@ -42,6 +42,8 @@ param diagnosticSamplingPercentage int = 100
 
 var proxyApiName = 'ado-remote-mcp-proxy'
 var proxyPath = 'ado-remote-mcp-proxy'
+var mcpExperimentApiName = 'ado-remote-mcp-experiment'
+var mcpExperimentPath = 'ado-remote-mcp-experiment'
 var oauthApiName = 'ado-remote-mcp-oauth'
 var backendUrl = 'https://mcp.dev.azure.com/${azureDevOpsOrganization}'
 var oauthResourceUrl = 'https://mcp.dev.azure.com'
@@ -192,6 +194,49 @@ resource proxyPostOperation 'Microsoft.ApiManagement/service/apis/operations@202
       }
     ]
   }
+}
+
+resource mcpExperimentApi 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
+  parent: apim
+  name: mcpExperimentApiName
+  properties: {
+    apiType: 'mcp'
+    displayName: 'Azure DevOps MCP Passthrough Experiment'
+    description: 'Experimental APIM existing-MCP passthrough to the hosted Azure DevOps MCP endpoint. Keep the HTTP proxy as the known-good path until this proves auth and tool discovery end-to-end.'
+    path: mcpExperimentPath
+    protocols: [
+      'https'
+    ]
+    serviceUrl: 'https://mcp.dev.azure.com'
+    subscriptionRequired: false
+    type: 'mcp'
+    mcpProperties: {
+      transportType: 'streamable'
+      endpoints: {
+        message: {
+          name: 'message'
+          uriTemplate: '/${azureDevOpsOrganization}'
+        }
+      }
+    }
+  }
+}
+
+resource mcpExperimentPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-09-01-preview' = {
+  parent: mcpExperimentApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('../policies/ado-remote-mcp-policy.xml')
+  }
+  dependsOn: [
+    metadataUrlNamedValue
+    rateLimitCallsNamedValue
+    rateLimitPeriodNamedValue
+    readOnlyNamedValue
+    resourceUrlNamedValue
+    toolsetsNamedValue
+  ]
 }
 
 resource oauthApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
@@ -466,6 +511,56 @@ resource oauthDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-
   ]
 }
 
+resource mcpExperimentDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-05-01' = {
+  parent: mcpExperimentApi
+  name: 'applicationinsights'
+  properties: {
+    alwaysLog: 'allErrors'
+    backend: {
+      request: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+      response: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+    }
+    frontend: {
+      request: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+      response: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+    }
+    httpCorrelationProtocol: 'W3C'
+    logClientIp: false
+    loggerId: loggerId
+    metrics: true
+    operationNameFormat: 'Name'
+    sampling: {
+      percentage: diagnosticSamplingPercentage
+      samplingType: 'fixed'
+    }
+    verbosity: 'error'
+  }
+  dependsOn: [
+    mcpExperimentPolicy
+  ]
+}
+
 output proxyApiId string = proxyApi.id
 output proxyUrl string = '${gatewayUrl}/${proxyPath}'
+output mcpExperimentUrl string = '${gatewayUrl}/${mcpExperimentPath}/mcp'
 output backendUrl string = backendUrl

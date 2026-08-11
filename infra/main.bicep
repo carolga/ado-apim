@@ -141,6 +141,7 @@ output AZURE_RESOURCE_GROUP_ID string = resourceGroup.id
 output APIM_NAME string = apim.outputs.name
 output APIM_GATEWAY_URL string = apim.outputs.gatewayUrl
 output ADO_REMOTE_MCP_PROXY_URL string = adoMcpProxy.outputs.proxyUrl
+output ADO_REMOTE_MCP_EXPERIMENT_URL string = adoMcpProxy.outputs.mcpExperimentUrl
 output ADO_REMOTE_MCP_BACKEND_URL string = adoMcpProxy.outputs.backendUrl
 output APPLICATION_INSIGHTS_RESOURCE_ID string = observability.outputs.applicationInsightsId
 output AZURE_LOG_ANALYTICS_WORKSPACE_ID string = observability.outputs.workspaceId
