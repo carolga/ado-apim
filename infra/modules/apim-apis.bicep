@@ -43,6 +43,7 @@ param diagnosticSamplingPercentage int = 100
 var proxyApiName = 'ado-remote-mcp-proxy'
 var proxyPath = 'ado-remote-mcp-proxy'
 var mcpExperimentApiName = 'ado-remote-mcp-experiment'
+var mcpExperimentBackendName = 'ado-remote-mcp-experiment-backend'
 var mcpExperimentPath = 'ado-remote-mcp-experiment'
 var oauthApiName = 'ado-remote-mcp-oauth'
 var backendUrl = 'https://mcp.dev.azure.com/${azureDevOpsOrganization}'
@@ -196,6 +197,19 @@ resource proxyPostOperation 'Microsoft.ApiManagement/service/apis/operations@202
   }
 }
 
+resource mcpExperimentBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
+  parent: apim
+  name: mcpExperimentBackendName
+  properties: {
+    protocol: 'http'
+    url: 'https://mcp.dev.azure.com'
+    tls: {
+      validateCertificateChain: true
+      validateCertificateName: true
+    }
+  }
+}
+
 resource mcpExperimentApi 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
   parent: apim
   name: mcpExperimentApiName
@@ -207,19 +221,22 @@ resource mcpExperimentApi 'Microsoft.ApiManagement/service/apis@2025-09-01-previ
     protocols: [
       'https'
     ]
-    serviceUrl: 'https://mcp.dev.azure.com'
+    backendId: mcpExperimentBackendName
     subscriptionRequired: false
     type: 'mcp'
     mcpProperties: {
       transportType: 'streamable'
       endpoints: {
-        message: {
-          name: 'message'
+        mcp: {
+          name: 'mcp'
           uriTemplate: '/${azureDevOpsOrganization}'
         }
       }
     }
   }
+  dependsOn: [
+    mcpExperimentBackend
+  ]
 }
 
 resource mcpExperimentPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-09-01-preview' = {
@@ -230,6 +247,7 @@ resource mcpExperimentPolicy 'Microsoft.ApiManagement/service/apis/policies@2025
     value: loadTextContent('../policies/ado-remote-mcp-policy.xml')
   }
   dependsOn: [
+    mcpExperimentBackend
     metadataUrlNamedValue
     rateLimitCallsNamedValue
     rateLimitPeriodNamedValue

@@ -148,24 +148,35 @@ Use that value in VS Code. The final configuration should look like this:
 
 Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns the configured `VS_CODE_PUBLIC_CLIENT_ID` during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. That public-client app must include the VS Code redirect URIs `http://127.0.0.1:33418/` and `https://vscode.dev/redirect`. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
 
-### Why this is an APIM HTTP API, not an APIM MCP server
+### HTTP proxy and APIM MCP passthrough
 
 Azure API Management has a product feature for exposing an existing remote MCP server as an APIM MCP server. That is the preferred product direction when the APIM MCP passthrough preserves the upstream MCP server's authentication flow, tool catalog, sessions, and streaming behavior.
 
-This repository uses a plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` because the hosted Azure DevOps MCP endpoint is already a complete remote MCP server. In live testing, the APIM MCP passthrough resource did not surface the hosted Azure DevOps MCP behavior correctly for this scenario. Specifically, it returned an empty tool catalog during unauthenticated tool discovery and did not give VS Code the same authentication behavior as the hosted Azure DevOps endpoint.
+This repository keeps the plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` as the known-good VS Code endpoint. It also deploys an APIM MCP passthrough experiment at `/ado-remote-mcp-experiment/mcp`.
 
-The HTTP API proxy keeps APIM in the gateway role:
+The important implementation detail for the APIM MCP resource is that it must use an APIM backend connection:
+
+```text
+backendId: ado-remote-mcp-experiment-backend
+backend URL: https://mcp.dev.azure.com
+endpoint key: mcp
+endpoint path: /<organization>
+```
+
+When the MCP resource was created with only `serviceUrl`, APIM initialized as `Azure API Management` and returned `tools: []`. When it was recreated with `backendId`, it initialized as `AzureDevOps.Mcp` and returned the hosted Azure DevOps MCP tools.
+
+The HTTP API proxy remains useful because it keeps APIM in a very transparent gateway role:
 
 - APIM forwards MCP JSON-RPC traffic to `https://mcp.dev.azure.com/<organization>`.
 - APIM applies enterprise controls such as rate limiting, read-only/toolset headers, header hygiene, diagnostics, and no body logging.
 - APIM provides only the minimal OAuth compatibility facade that VS Code needs when the MCP server URL is on the APIM hostname.
 - Azure DevOps MCP still owns tool behavior, token validation, user authorization, and audit semantics.
 
-If APIM's existing-MCP passthrough later preserves the hosted Azure DevOps MCP auth and tool catalog end-to-end, this repo should be simplified to use the APIM MCP resource type. Until then, the HTTP API proxy is the working and most transparent implementation.
+Use the MCP experiment to evaluate whether APIM's product-native MCP endpoint is ready to become the primary path for your environment.
 
 ### Experimental APIM MCP passthrough endpoint
 
-The deployment also includes an experimental APIM MCP passthrough endpoint so you can test the product-native shape side by side:
+The deployment also includes an experimental APIM MCP passthrough endpoint so you can test the product-native shape side by side. This resource is wired using an APIM backend connection, which matches the resource shape created by the Azure portal for an existing MCP server.
 
 ```powershell
 azd env get-value ADO_REMOTE_MCP_EXPERIMENT_URL
@@ -177,7 +188,7 @@ Expected path:
 https://<apim-host>/ado-remote-mcp-experiment/mcp
 ```
 
-Use this only for comparison testing. Keep `ADO_REMOTE_MCP_PROXY_URL` as the known-good endpoint unless the experimental MCP endpoint proves that authentication, tool discovery, sessions, and tool calls all work end-to-end.
+Use this for comparison testing. The endpoint has been verified to return `serverInfo.name = AzureDevOps.Mcp` and a non-empty hosted Azure DevOps MCP tool catalog when called with a valid delegated token.
 
 ### Compare direct ADO MCP, APIM HTTP proxy, and APIM MCP experiment
 
@@ -281,7 +292,7 @@ Expected result:
 |---|---|
 | Direct hosted Azure DevOps MCP | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
 | APIM HTTP proxy | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
-| APIM MCP experiment | Currently returns `serverInfo.name` as `Azure API Management` and `tools: []` |
+| APIM MCP experiment | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools when configured with an APIM backend connection |
 
 ### Add the server in VS Code
 
