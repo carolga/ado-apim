@@ -179,6 +179,110 @@ https://<apim-host>/ado-remote-mcp-experiment/mcp
 
 Use this only for comparison testing. Keep `ADO_REMOTE_MCP_PROXY_URL` as the known-good endpoint unless the experimental MCP endpoint proves that authentication, tool discovery, sessions, and tool calls all work end-to-end.
 
+### Compare direct ADO MCP, APIM HTTP proxy, and APIM MCP experiment
+
+Use this PowerShell script to acquire a delegated token for hosted Azure DevOps MCP, call `initialize`, and then call `tools/list` against all three endpoints:
+
+```powershell
+$token = az account get-access-token `
+  --scope "https://mcp.dev.azure.com/.default" `
+  --query accessToken `
+  -o tsv
+
+function Invoke-McpToolsList {
+  param(
+    [string] $Url,
+    [string] $Token
+  )
+
+  $headers = @{
+    Accept = "application/json, text/event-stream"
+    "Content-Type" = "application/json"
+    Authorization = "Bearer $Token"
+  }
+
+  $initializeBody = @{
+    jsonrpc = "2.0"
+    id = 1
+    method = "initialize"
+    params = @{
+      protocolVersion = "2025-06-18"
+      capabilities = @{}
+      clientInfo = @{
+        name = "validation"
+        version = "1.0"
+      }
+    }
+  } | ConvertTo-Json -Depth 10 -Compress
+
+  $initialize = Invoke-WebRequest `
+    -Uri $Url `
+    -Method Post `
+    -Body $initializeBody `
+    -Headers $headers `
+    -SkipHttpErrorCheck `
+    -TimeoutSec 30
+
+  $session = $initialize.Headers["Mcp-Session-Id"] | Select-Object -First 1
+  if ($session) {
+    $headers["Mcp-Session-Id"] = $session
+  }
+
+  $toolsBody = @{
+    jsonrpc = "2.0"
+    id = 2
+    method = "tools/list"
+    params = @{}
+  } | ConvertTo-Json -Depth 5 -Compress
+
+  $tools = Invoke-WebRequest `
+    -Uri $Url `
+    -Method Post `
+    -Body $toolsBody `
+    -Headers $headers `
+    -SkipHttpErrorCheck `
+    -TimeoutSec 30
+
+  $initializeText = if ($initialize.Content -is [byte[]]) {
+    [Text.Encoding]::UTF8.GetString($initialize.Content)
+  } else {
+    [string] $initialize.Content
+  }
+
+  $toolsText = if ($tools.Content -is [byte[]]) {
+    [Text.Encoding]::UTF8.GetString($tools.Content)
+  } else {
+    [string] $tools.Content
+  }
+
+  [pscustomobject]@{
+    Url = $Url
+    InitializeStatus = $initialize.StatusCode
+    InitializeBodyPrefix = $initializeText.Substring(0, [Math]::Min(500, $initializeText.Length))
+    ToolsStatus = $tools.StatusCode
+    ToolsBodyPrefix = $toolsText.Substring(0, [Math]::Min(1500, $toolsText.Length))
+  }
+}
+
+$urls = @(
+  "https://mcp.dev.azure.com/<organization>",
+  (azd env get-value ADO_REMOTE_MCP_PROXY_URL),
+  (azd env get-value ADO_REMOTE_MCP_EXPERIMENT_URL)
+)
+
+$urls | ForEach-Object {
+  Invoke-McpToolsList -Url $_ -Token $token
+} | Format-List
+```
+
+Expected result:
+
+| Endpoint | Expected behavior |
+|---|---|
+| Direct hosted Azure DevOps MCP | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
+| APIM HTTP proxy | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools |
+| APIM MCP experiment | Currently returns `serverInfo.name` as `Azure API Management` and `tools: []` |
+
 ### Add the server in VS Code
 
 1. Open VS Code.
