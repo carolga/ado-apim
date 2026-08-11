@@ -41,13 +41,16 @@ Use that value in VS Code. The final configuration should look like this:
   "servers": {
     "ado-mcp-apim-proxy": {
       "type": "http",
-      "url": "https://<apim-host>/ado-remote-mcp-proxy"
+      "url": "https://<apim-host>/ado-remote-mcp-proxy",
+      "oauth": {
+        "clientId": "https://vscode.dev/oauth/client-metadata.json"
+      }
     }
   }
 }
 ```
 
-Do not configure a custom `oauth.clientId`. VS Code should follow the protected-resource metadata returned by the hosted Azure DevOps MCP endpoint, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
+The `oauth.clientId` value is VS Code's published native-client identifier. It avoids Dynamic Client Registration when the hosted Azure DevOps MCP endpoint is reached through an APIM hostname. VS Code should follow the protected-resource metadata returned by the hosted Azure DevOps MCP endpoint, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
 
 ### Add the server in VS Code
 
@@ -97,12 +100,12 @@ Use this reset sequence:
 3. Run **MCP: List Servers**.
 4. Stop or disable any old MCP entries for the same APIM host.
 5. Run **MCP: Reset Trust**.
-6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host.
+6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host, including the `oauth.clientId` shown above.
 7. Rename the server ID if needed, for example from `azure-devops-hosted-via-apim` to `ado-mcp-apim-proxy`, so VS Code treats it as a new MCP server.
 8. Run **Developer: Reload Window**.
 9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
 
-Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the hosted Azure DevOps MCP resource metadata and should not ask you to register an APIM-root client.
+Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the configured VS Code OAuth client and hosted Azure DevOps MCP resource metadata, so it should not ask you to register an APIM-root client.
 
 ## Configuration
 
