@@ -8,14 +8,14 @@ MCP client
   -> hosted Azure DevOps MCP
 ```
 
-APIM does not own Azure DevOps authentication. It only publishes proxy-specific protected-resource metadata so MCP clients can acquire a delegated token for the hosted Azure DevOps MCP resource.
+APIM does not own Azure DevOps authentication. It preserves the hosted Azure DevOps MCP authentication challenge so MCP clients can acquire a delegated token for the hosted Azure DevOps MCP resource.
 
 ## Request flow
 
 1. VS Code calls `https://<apim-host>/ado-remote-mcp-proxy`.
 2. APIM forwards the unauthenticated request to hosted Azure DevOps MCP.
 3. Azure DevOps returns `401`.
-4. APIM rewrites the challenge to APIM-hosted protected-resource metadata for the proxy path.
+4. APIM preserves the hosted Azure DevOps MCP authentication challenge.
 5. VS Code obtains a delegated token for `https://mcp.dev.azure.com/.default`.
 6. VS Code retries through APIM with the user token.
 7. Azure DevOps authorizes the request as the signed-in user.

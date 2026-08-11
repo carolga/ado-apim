@@ -17,7 +17,6 @@ azd auth login
 azd env new <environment-name> --no-prompt
 azd env set AZURE_SUBSCRIPTION_ID <subscription-id>
 azd env set AZURE_LOCATION centralus
-azd env set AZURE_TENANT_ID <tenant-id>
 azd env set AZURE_DEVOPS_ORGANIZATION <organization-name>
 azd env set APIM_PUBLISHER_NAME <publisher-name>
 azd env set APIM_PUBLISHER_EMAIL <publisher-email>

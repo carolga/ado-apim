@@ -67,7 +67,6 @@ try {
     Required 'infra\modules\apim-apis.bicep' | Out-Null
     Required 'infra\modules\observability.bicep' | Out-Null
     Required 'infra\policies\ado-remote-mcp-policy.xml' | Out-Null
-    Required 'infra\policies\ado-remote-mcp-protected-resource-policy.xml' | Out-Null
 
     foreach ($json in Get-ChildItem $repoRoot -Recurse -File -Filter '*.json' |
         Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|bin|obj)\\') {
@@ -107,7 +106,7 @@ try {
 
     Has $implementationText 'https://mcp\.dev\.azure\.com' 'implementation targets hosted Azure DevOps MCP'
     Has $implementationText 'ado-remote-mcp-proxy' 'implementation exposes the APIM proxy path'
-    Has $implementationText 'https://mcp\.dev\.azure\.com/\.default' 'metadata advertises hosted ADO MCP scope'
+    Has $implementationText 'WWW-Authenticate' 'documentation describes hosted ADO MCP auth challenge handling'
     Has $implementationText 'X-MCP-Readonly' 'policy enforces hosted ADO MCP read-only header'
     Has $implementationText 'X-MCP-Toolsets' 'policy enforces hosted ADO MCP toolsets header'
     Has $implementationText '(?im)body\s*:\s*\{\s*bytes\s*:\s*0' 'diagnostics log zero body bytes'

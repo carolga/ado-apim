@@ -14,7 +14,7 @@ VS Code / GitHub Copilot
   -> https://mcp.dev.azure.com/<organization>
 ```
 
-APIM publishes protected-resource metadata for its proxy path, but that metadata advertises the hosted Azure DevOps MCP resource and `https://mcp.dev.azure.com/.default` scope. Azure DevOps authorizes actions using the signed-in user's delegated token.
+APIM preserves the hosted Azure DevOps MCP authentication challenge and forwards MCP traffic to Azure DevOps. Azure DevOps authorizes actions using the signed-in user's delegated token.
 
 ## In scope
 
@@ -22,7 +22,6 @@ APIM publishes protected-resource metadata for its proxy path, but that metadata
 - Log Analytics
 - Application Insights
 - APIM HTTP API proxy
-- APIM protected-resource metadata endpoint
 - APIM governance policies
 
 ## Exclusions

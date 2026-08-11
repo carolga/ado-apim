@@ -110,7 +110,7 @@ Use this reset sequence:
 8. Run **Developer: Reload Window**.
 9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
 
-Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the configured VS Code OAuth client and hosted Azure DevOps MCP resource metadata, so it should not ask you to register an APIM-root client.
+Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses the hosted Azure DevOps MCP resource metadata, so it should not ask you to register an APIM-root client.
 
 ## Configuration
 
@@ -118,7 +118,6 @@ Required azd values:
 
 ```powershell
 azd env set AZURE_LOCATION centralus
-azd env set AZURE_TENANT_ID <tenant-id>
 azd env set AZURE_DEVOPS_ORGANIZATION <organization-name>
 azd env set APIM_PUBLISHER_NAME <publisher-name>
 azd env set APIM_PUBLISHER_EMAIL <publisher-email>
@@ -168,7 +167,7 @@ azd provision --no-prompt
 
 ## Verify
 
-Unauthenticated MCP initialize should return a `401` with APIM-hosted protected-resource metadata:
+Unauthenticated MCP initialize should return a `401` with the hosted Azure DevOps MCP protected-resource metadata:
 
 ```powershell
 $url = azd env get-value ADO_REMOTE_MCP_PROXY_URL
@@ -181,11 +180,9 @@ Invoke-WebRequest `
   -SkipHttpErrorCheck
 ```
 
-The metadata endpoint should advertise:
+The `WWW-Authenticate` response should point at:
 
-- `resource`: `https://mcp.dev.azure.com/<organization>`
-- `authorization_servers`: your tenant-specific Entra v2 authority
-- `scopes_supported`: `https://mcp.dev.azure.com/.default`
+- `https://mcp.dev.azure.com/.well-known/oauth-protected-resource/<organization>`
 
 ## Policy reference
 
@@ -248,28 +245,3 @@ This policy is attached to the `/ado-remote-mcp-proxy` API. It governs calls to 
 | 54-56 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
 | 57 | `</on-error>` | Ends APIM error handling. |
 | 58 | `</policies>` | Ends the APIM policy document. |
-
-### `infra/policies/ado-remote-mcp-protected-resource-policy.xml`
-
-This policy is attached to the metadata operation at `/.well-known/oauth-protected-resource/ado-remote-mcp-proxy`. It is intentionally a static response because the metadata values are deployment configuration.
-
-| Line(s) | Policy | Why it is needed |
-|---:|---|---|
-| 1 | `<policies>` | Root APIM policy document element. |
-| 2 | `<inbound>` | Handles metadata requests before APIM tries to route to any backend. |
-| 3 | `<return-response>` | Makes APIM answer metadata requests directly. No backend call is needed for static OAuth metadata. |
-| 4 | `200 OK` | Metadata discovery must succeed without authentication so MCP clients can start the OAuth flow. |
-| 5 | `Content-Type: application/json` | Tells MCP clients to parse the response as JSON metadata. |
-| 6 | `Cache-Control: no-store` | Avoids stale auth metadata after tenant, organization, or proxy URL changes. |
-| 7 | `<set-body>` | Starts the JSON metadata body. |
-| 8 | `resource` | Advertises the real hosted Azure DevOps MCP resource URL. Tokens should be requested for this resource, not for APIM. |
-| 9 | `authorization_servers` | Points clients to the tenant-specific Microsoft Entra v2 authority. |
-| 10 | `bearer_methods_supported` | States that bearer tokens are sent in the HTTP `Authorization` header. |
-| 11 | `scopes_supported` | Tells clients to request `https://mcp.dev.azure.com/.default`, which is the hosted Azure DevOps MCP delegated scope. |
-| 12 | End JSON body | Closes the metadata JSON object. |
-| 13 | `</return-response>` | Ends direct response generation. |
-| 14 | `</inbound>` | Ends inbound metadata handling. |
-| 15 | `<backend><forward-request /></backend>` | Required APIM policy section. It is not reached because inbound always returns metadata. |
-| 16 | `<outbound><base /></outbound>` | Required APIM policy section preserving inherited outbound behavior if ever reached. |
-| 17 | `<on-error><base /></on-error>` | Required APIM policy section preserving inherited error behavior. |
-| 18 | `</policies>` | Ends the APIM policy document. |

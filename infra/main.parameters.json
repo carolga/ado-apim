@@ -8,9 +8,6 @@
     "location": {
       "value": "${AZURE_LOCATION}"
     },
-    "tenantId": {
-      "value": "${AZURE_TENANT_ID}"
-    },
     "azureDevOpsOrganization": {
       "value": "${AZURE_DEVOPS_ORGANIZATION}"
     },
