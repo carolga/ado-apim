@@ -16,7 +16,6 @@ APIM acts as a governed HTTP proxy for the GA hosted Azure DevOps MCP endpoint a
 - Azure API Management
 - Log Analytics and workspace-based Application Insights
 - A raw APIM HTTP API at `/ado-remote-mcp-proxy`
-- APIM-hosted protected-resource metadata at `/.well-known/oauth-protected-resource/ado-remote-mcp-proxy`
 - APIM policies for:
   - HTTPS enforcement
   - per-IP rate limiting
@@ -48,7 +47,7 @@ Use that value in VS Code. The final configuration should look like this:
 }
 ```
 
-Do not configure a custom `oauth.clientId`. VS Code should follow the protected-resource metadata returned by APIM, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
+Do not configure a custom `oauth.clientId`. VS Code should follow the protected-resource metadata returned by the hosted Azure DevOps MCP endpoint, request a token for `https://mcp.dev.azure.com/.default`, and send that delegated user token through APIM to Azure DevOps.
 
 ### Add the server in VS Code
 
@@ -85,10 +84,10 @@ If tools do not appear, run **MCP: List Servers**, restart `ado-mcp-apim-proxy`,
 
 ### Troubleshoot stale OAuth discovery
 
-If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry. The current proxy should challenge with:
+If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry. The current proxy should preserve the hosted Azure DevOps MCP challenge:
 
 ```text
-WWW-Authenticate: Bearer resource_metadata="https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy"
+WWW-Authenticate: Bearer resource_metadata="https://mcp.dev.azure.com/.well-known/oauth-protected-resource/<organization>"
 ```
 
 Use this reset sequence:
@@ -232,19 +231,15 @@ This policy is attached to the `/ado-remote-mcp-proxy` API. It governs calls to 
 | 45 | `</backend>` | Ends backend forwarding behavior. |
 | 46 | `<outbound>` | Starts response-side processing after Azure DevOps responds. |
 | 47 | `<base />` | Preserves inherited outbound policies. |
-| 48 | `<choose>` | Adds conditional response handling. |
-| 49 | `StatusCode == 401` | Detects authentication challenges from Azure DevOps. |
-| 50-52 | Rewrite `WWW-Authenticate` | Points VS Code to APIM-hosted protected-resource metadata for this proxy path. This prevents VS Code from discovering unrelated APIM metadata while still advertising the Azure DevOps MCP resource. |
-| 53-54 | Close challenge rewrite block | Ends conditional response handling. |
-| 55 | `Cache-Control: no-store` | Prevents caching of MCP responses and authentication challenges. |
-| 56 | Set `X-Correlation-ID` | Echoes the normalized correlation ID on successful and error responses. |
-| 57 | `</outbound>` | Ends response-side processing. |
-| 58 | `<on-error>` | Starts policy logic for APIM-side failures. |
-| 59 | `<base />` | Preserves inherited error handling. |
-| 60 | `Cache-Control: no-store` | Prevents APIM-generated errors from being cached. |
-| 61-63 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
-| 64 | `</on-error>` | Ends APIM error handling. |
-| 65 | `</policies>` | Ends the APIM policy document. |
+| 48 | `Cache-Control: no-store` | Prevents caching of MCP responses and authentication challenges. The hosted Azure DevOps `WWW-Authenticate` challenge is intentionally preserved unchanged. |
+| 49 | Set `X-Correlation-ID` | Echoes the normalized correlation ID on successful and error responses. |
+| 50 | `</outbound>` | Ends response-side processing. |
+| 51 | `<on-error>` | Starts policy logic for APIM-side failures. |
+| 52 | `<base />` | Preserves inherited error handling. |
+| 53 | `Cache-Control: no-store` | Prevents APIM-generated errors from being cached. |
+| 54-56 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
+| 57 | `</on-error>` | Ends APIM error handling. |
+| 58 | `</policies>` | Ends the APIM policy document. |
 
 ### `infra/policies/ado-remote-mcp-protected-resource-policy.xml`
 
