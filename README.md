@@ -148,11 +148,18 @@ Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth c
 
 ### Why this is an APIM HTTP API, not an APIM MCP server
 
-APIM is intentionally hosting this as a plain HTTP API proxy at `/ado-remote-mcp-proxy`.
+Azure API Management has a product feature for exposing an existing remote MCP server as an APIM MCP server. That is the preferred product direction when the APIM MCP passthrough preserves the upstream MCP server's authentication flow, tool catalog, sessions, and streaming behavior.
 
-The backend is already a complete remote MCP server hosted by Azure DevOps. The goal is to preserve that server's MCP protocol behavior, authentication challenge, sessions, streaming behavior, tool discovery, and user-token validation. A plain APIM HTTP API can forward the MCP JSON-RPC traffic and the hosted Azure DevOps `WWW-Authenticate` challenge without trying to reinterpret the MCP protocol.
+This repository uses a plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` because the hosted Azure DevOps MCP endpoint is already a complete remote MCP server. In live testing, the APIM MCP passthrough resource did not surface the hosted Azure DevOps MCP behavior correctly for this scenario. Specifically, it returned an empty tool catalog during unauthenticated tool discovery and did not give VS Code the same authentication behavior as the hosted Azure DevOps endpoint.
 
-APIM's MCP server resource type is useful when APIM is generating an MCP surface from REST operations, or when the APIM MCP passthrough behavior fully preserves the upstream server's auth and tool catalog. In this test, the APIM MCP resource path did not preserve the hosted Azure DevOps behavior correctly, so the repo uses the simpler HTTP proxy shape.
+The HTTP API proxy keeps APIM in the gateway role:
+
+- APIM forwards MCP JSON-RPC traffic to `https://mcp.dev.azure.com/<organization>`.
+- APIM applies enterprise controls such as rate limiting, read-only/toolset headers, header hygiene, diagnostics, and no body logging.
+- APIM provides only the minimal OAuth compatibility facade that VS Code needs when the MCP server URL is on the APIM hostname.
+- Azure DevOps MCP still owns tool behavior, token validation, user authorization, and audit semantics.
+
+If APIM's existing-MCP passthrough later preserves the hosted Azure DevOps MCP auth and tool catalog end-to-end, this repo should be simplified to use the APIM MCP resource type. Until then, the HTTP API proxy is the working and most transparent implementation.
 
 ### Add the server in VS Code
 
