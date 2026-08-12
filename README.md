@@ -148,13 +148,11 @@ Use that value in VS Code. The final configuration should look like this:
 
 Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns the configured `VS_CODE_PUBLIC_CLIENT_ID` during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. That public-client app must include the VS Code redirect URIs `http://127.0.0.1:33418/` and `https://vscode.dev/redirect`. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
 
-### HTTP proxy and APIM MCP passthrough
+### Why this uses the HTTP proxy instead of APIM native MCP
 
-Azure API Management has a product feature for exposing an existing remote MCP server as an APIM MCP server. That is the preferred product direction when the APIM MCP passthrough preserves the upstream MCP server's authentication flow, tool catalog, sessions, and streaming behavior.
+This repository keeps the plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` as the supported VS Code endpoint. It also deploys an APIM native MCP passthrough experiment at `/ado-remote-mcp-experiment/mcp`, but that endpoint is for comparison only and should not be used as the VS Code configuration.
 
-This repository keeps the plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` as the known-good VS Code endpoint. It also deploys an APIM MCP passthrough experiment at `/ado-remote-mcp-experiment/mcp`.
-
-The important implementation detail for the APIM MCP resource is that it must use an APIM backend connection:
+The APIM native MCP resource must be wired to the hosted Azure DevOps MCP server through an APIM backend connection, not only a service URL:
 
 ```text
 backendId: ado-remote-mcp-experiment-backend
@@ -163,138 +161,21 @@ endpoint key: mcp
 endpoint path: /<organization>
 ```
 
-When the MCP resource was created with only `serviceUrl`, APIM initialized as `Azure API Management` and returned `tools: []`. When it was recreated with `backendId`, it initialized as `AzureDevOps.Mcp` and returned the hosted Azure DevOps MCP tools.
-
-The HTTP API proxy remains useful because it keeps APIM in a very transparent gateway role:
-
-- APIM forwards MCP JSON-RPC traffic to `https://mcp.dev.azure.com/<organization>`.
-- APIM applies enterprise controls such as rate limiting, read-only/toolset headers, header hygiene, diagnostics, and no body logging.
-- APIM provides only the minimal OAuth compatibility facade that VS Code needs when the MCP server URL is on the APIM hostname.
-- Azure DevOps MCP still owns tool behavior, token validation, user authorization, and audit semantics.
-
-Use the MCP experiment to evaluate whether APIM's product-native MCP endpoint is ready to become the primary path for your environment.
-
-### Experimental APIM MCP passthrough endpoint
-
-The deployment also includes an experimental APIM MCP passthrough endpoint so you can test the product-native shape side by side. This resource is wired using an APIM backend connection, which matches the resource shape created by the Azure portal for an existing MCP server.
-
-```powershell
-azd env get-value ADO_REMOTE_MCP_EXPERIMENT_URL
-```
-
-Expected path:
+With that shape, APIM native MCP can initialize as `AzureDevOps.Mcp` and return the hosted Azure DevOps MCP tool catalog. However, it still fails real tool invocation. For example, `tools/call` for `core_list_projects` returns:
 
 ```text
-https://<apim-host>/ado-remote-mcp-experiment/mcp
+VS30063: You are not authorized to access https://dev.azure.com.
 ```
 
-Use this for comparison testing only. The endpoint has been verified to return `serverInfo.name = AzureDevOps.Mcp` and a non-empty hosted Azure DevOps MCP tool catalog when called with a valid delegated token, but it is not a viable VS Code endpoint for Azure DevOps MCP today.
+The same delegated token succeeds when calling direct hosted Azure DevOps MCP and when calling through the APIM HTTP proxy. The limitation is therefore specific to APIM native MCP passthrough, not the token itself or the user's Azure DevOps permissions.
 
-Known limitation: APIM native MCP passthrough can list hosted Azure DevOps MCP tools but fails real tool invocation. For example, `tools/call` for `core_list_projects` returns `VS30063: You are not authorized to access https://dev.azure.com.` The same delegated token succeeds against direct hosted Azure DevOps MCP and through the APIM HTTP proxy. The public `microsoft/azure-devops-mcp` repo confirms why this matters: tool calls create authenticated Azure DevOps REST clients or direct REST requests at invocation time, so runtime bearer-token preservation is required beyond `initialize` and `tools/list`. Until APIM native MCP preserves those delegated-token semantics end to end for hosted Azure DevOps MCP, use the HTTP proxy endpoint instead.
+The public `microsoft/azure-devops-mcp` repo confirms why this is a blocker: Azure DevOps MCP tools create authenticated Azure DevOps REST clients, or send direct authenticated REST requests, at tool invocation time. That means auth must be preserved beyond `initialize` and `tools/list`; the runtime delegated bearer token must reach the downstream Azure DevOps REST call. APIM HTTP proxy preserves that behavior by forwarding MCP JSON-RPC traffic transparently to `https://mcp.dev.azure.com/<organization>`. APIM native MCP currently does not preserve the required delegated-token semantics end to end for hosted Azure DevOps MCP tool calls.
 
-### Compare direct ADO MCP, APIM HTTP proxy, and APIM MCP experiment
-
-Use this PowerShell script to acquire a delegated token for hosted Azure DevOps MCP, call `initialize`, and then call `tools/list` against all three endpoints:
+Use the HTTP proxy endpoint for VS Code:
 
 ```powershell
-$token = az account get-access-token `
-  --scope "https://mcp.dev.azure.com/.default" `
-  --query accessToken `
-  -o tsv
-
-function Invoke-McpToolsList {
-  param(
-    [string] $Url,
-    [string] $Token
-  )
-
-  $headers = @{
-    Accept = "application/json, text/event-stream"
-    "Content-Type" = "application/json"
-    Authorization = "Bearer $Token"
-  }
-
-  $initializeBody = @{
-    jsonrpc = "2.0"
-    id = 1
-    method = "initialize"
-    params = @{
-      protocolVersion = "2025-06-18"
-      capabilities = @{}
-      clientInfo = @{
-        name = "validation"
-        version = "1.0"
-      }
-    }
-  } | ConvertTo-Json -Depth 10 -Compress
-
-  $initialize = Invoke-WebRequest `
-    -Uri $Url `
-    -Method Post `
-    -Body $initializeBody `
-    -Headers $headers `
-    -SkipHttpErrorCheck `
-    -TimeoutSec 30
-
-  $session = $initialize.Headers["Mcp-Session-Id"] | Select-Object -First 1
-  if ($session) {
-    $headers["Mcp-Session-Id"] = $session
-  }
-
-  $toolsBody = @{
-    jsonrpc = "2.0"
-    id = 2
-    method = "tools/list"
-    params = @{}
-  } | ConvertTo-Json -Depth 5 -Compress
-
-  $tools = Invoke-WebRequest `
-    -Uri $Url `
-    -Method Post `
-    -Body $toolsBody `
-    -Headers $headers `
-    -SkipHttpErrorCheck `
-    -TimeoutSec 30
-
-  $initializeText = if ($initialize.Content -is [byte[]]) {
-    [Text.Encoding]::UTF8.GetString($initialize.Content)
-  } else {
-    [string] $initialize.Content
-  }
-
-  $toolsText = if ($tools.Content -is [byte[]]) {
-    [Text.Encoding]::UTF8.GetString($tools.Content)
-  } else {
-    [string] $tools.Content
-  }
-
-  [pscustomobject]@{
-    Url = $Url
-    InitializeStatus = $initialize.StatusCode
-    InitializeBodyPrefix = $initializeText.Substring(0, [Math]::Min(500, $initializeText.Length))
-    ToolsStatus = $tools.StatusCode
-    ToolsBodyPrefix = $toolsText.Substring(0, [Math]::Min(1500, $toolsText.Length))
-  }
-}
-
-$urls = @(
-  "https://mcp.dev.azure.com/<organization>",
-  (azd env get-value ADO_REMOTE_MCP_PROXY_URL),
-  (azd env get-value ADO_REMOTE_MCP_EXPERIMENT_URL)
-)
-
-$urls | ForEach-Object {
-  Invoke-McpToolsList -Url $_ -Token $token
-} | Format-List
+azd env get-value ADO_REMOTE_MCP_PROXY_URL
 ```
-
-Expected result:
-
-| Endpoint | Expected behavior |
-|---|---|
-| Direct hosted Azure DevOps MCP | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools; real tool calls succeed with a valid delegated token |
-| APIM HTTP proxy | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools; real tool calls succeed with the same delegated token |
-| APIM MCP experiment | `serverInfo.name` is `AzureDevOps.Mcp`; `tools/list` returns tools when configured with an APIM backend connection, but real tool calls fail with `VS30063` and this endpoint should not be used for VS Code |
 
 ### Add the server in VS Code
 
