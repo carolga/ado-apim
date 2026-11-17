@@ -1,139 +1,89 @@
 # Azure DevOps MCP through Azure API Management
 
-This repository deploys one working implementation:
+This repository contains Azure infrastructure and APIM policies, not an application server. It provisions an HTTP proxy to the hosted Azure DevOps MCP endpoint:
 
 ```text
 VS Code / GitHub Copilot
-  -> Azure API Management
-  -> hosted Azure DevOps MCP endpoint
+  -> https://<apim-host>/ado-remote-mcp-proxy
+  -> https://mcp.dev.azure.com/<organization>
   -> Azure DevOps
 ```
 
-APIM acts as a governed HTTP proxy for the GA hosted Azure DevOps MCP endpoint at `https://mcp.dev.azure.com/<organization>`. Azure DevOps remains the OAuth resource server and authorizes every request as the signed-in user.
+Azure DevOps authorizes requests using the signed-in user's delegated token. APIM forwards that token, but **rewrites backend `401` challenges** to use an APIM-hosted OAuth discovery and compatibility facade. It does not simply pass authentication challenges through unchanged.
 
 ## What gets deployed
 
-- Azure API Management
-- Log Analytics and workspace-based Application Insights
-- A raw APIM HTTP API at `/ado-remote-mcp-proxy`
-- APIM policies for:
-  - HTTPS enforcement
-  - per-IP rate limiting
-  - `X-MCP-Readonly`
-  - `X-MCP-Toolsets`
-  - header hygiene
-  - zero body logging
+- One resource group containing a public Azure API Management service, Log Analytics workspace, and workspace-based Application Insights.
+- An HTTPS HTTP API at `/ado-remote-mcp-proxy`, with a single `POST /` operation.
+- An APIM root API providing protected-resource metadata, authorization-server metadata, `/register`, `/authorize`, and `/token`.
+- An experimental native MCP API at `/ado-remote-mcp-experiment/mcp`, using the `2025-09-01-preview` API version. It is deployed unconditionally, not enabled by a feature flag.
+- APIM named values and policies for read-only/toolset request headers, per-IP rate limiting on the MCP APIs, correlation IDs, selected header removal, and authentication compatibility.
+- Application Insights diagnostics on all three APIs, configured with zero request/response body bytes, no selected headers, and `logClientIp: false`.
 
-The deployment does **not** create an application backend, app registration, client credential, or shared service caller.
+The deployment does **not** create an application backend, Entra app registration, enterprise application, consent grant, private network, or shared service caller. There are no application build or service deployment steps in `azure.yaml`; deployment uses `azd provision`.
 
-## Microsoft Entra requirements
+Start with the [deployment guide](docs/deployment-guide.md) for all required settings, then use the VS Code configuration below. The [architecture reference](docs/architecture-plan.md) explains the routes, OAuth flow, and policy boundaries.
 
-This APIM proxy uses the hosted Azure DevOps MCP OAuth resource. VS Code discovers APIM as the authorization server facade, APIM performs Dynamic Client Registration compatibility, and Microsoft Entra issues a delegated user token for Azure DevOps MCP.
+## Microsoft Entra setup
 
-You need two Entra objects configured before users can sign in successfully.
+These are **manual prerequisites**, not resources created by Bicep. Use the tenant associated with the Azure DevOps organization, and a user with access to the relevant organization, projects, and resources.
 
-### 1. Azure DevOps MCP enterprise application
+### Azure DevOps MCP enterprise application
 
-The tenant must contain the **Azure DevOps MCP** enterprise application:
+The tenant needs the Azure DevOps MCP service principal (application ID `2a72489c-aab2-4b65-b93a-a91edccf33b8`). Follow Microsoft's [remote MCP troubleshooting guide](https://learn.microsoft.com/azure/devops/mcp-server/remote-mcp-server-troubleshooting?view=azure-devops#cant-find-the-azure-devops-mcp-enterprise-application-in-the-tenant).
 
-```text
-Application ID: 2a72489c-aab2-4b65-b93a-a91edccf33b8
-Display name: Azure DevOps MCP
-```
-
-Microsoft documents this enterprise app ID in the [remote Azure DevOps MCP Server troubleshooting guide](https://learn.microsoft.com/azure/devops/mcp-server/remote-mcp-server-troubleshooting?view=azure-devops#cant-find-the-azure-devops-mcp-enterprise-application-in-the-tenant).
-
-If it is missing, a tenant administrator with Application Administrator, Cloud Application Administrator, or Global Administrator permissions can create the service principal:
+Check whether it exists:
 
 ```powershell
 az login --tenant <tenant-id> --allow-no-subscriptions
-az ad sp create --id 2a72489c-aab2-4b65-b93a-a91edccf33b8
-```
-
-Verify it exists:
-
-```powershell
 az ad sp show --id 2a72489c-aab2-4b65-b93a-a91edccf33b8 `
   --query "{appId:appId,displayName:displayName,accountEnabled:accountEnabled}"
 ```
 
-Expected values:
+If it is missing, an appropriately authorized tenant administrator can create it:
 
-```json
-{
-  "appId": "2a72489c-aab2-4b65-b93a-a91edccf33b8",
-  "displayName": "Azure DevOps MCP",
-  "accountEnabled": true
-}
+```powershell
+az ad sp create --id 2a72489c-aab2-4b65-b93a-a91edccf33b8
 ```
 
-### 2. VS Code public client application
+Creating the service principal does not grant users access to Azure DevOps or guarantee that a custom client is permitted by tenant/resource policies.
 
-APIM returns this public client ID from its `/register` compatibility endpoint. Configure the value through `VS_CODE_PUBLIC_CLIENT_ID`.
+### Public client application for VS Code
 
-The app registration must be a public/native client and must include these redirect URIs:
+Create or select a public/native client app registration in the same tenant. Set its application ID as `VS_CODE_PUBLIC_CLIENT_ID`. Configure these public-client redirect URIs, which are hard-coded in the `/register` policy response:
 
 ```text
 http://127.0.0.1:33418/
 https://vscode.dev/redirect
 ```
 
-The app registration must also request delegated access to the **Azure DevOps MCP** resource:
-
-```text
-Resource app ID: 2a72489c-aab2-4b65-b93a-a91edccf33b8
-Delegated permission: Ado.Mcp.Tools
-Permission ID: f8dac17a-2c07-463d-a820-8956dc52dfb5
-```
-
-Example CLI setup for an existing public client app:
+Configure delegated access to the Azure DevOps MCP resource. Check the resource's currently exposed permissions in your tenant before adding consent; the repository does not provision or validate them:
 
 ```powershell
-$clientAppId = "<VS_CODE_PUBLIC_CLIENT_ID>"
-$resourceAppId = "2a72489c-aab2-4b65-b93a-a91edccf33b8"
-$scopeId = "f8dac17a-2c07-463d-a820-8956dc52dfb5"
-
-$app = az ad app show --id $clientAppId | ConvertFrom-Json
-$required = @($app.requiredResourceAccess)
-
-$required = @($required | Where-Object { $_.resourceAppId -ne $resourceAppId })
-$required += [pscustomobject]@{
-  resourceAppId = $resourceAppId
-  resourceAccess = @(
-    [pscustomobject]@{
-      id = $scopeId
-      type = "Scope"
-    }
-  )
-}
-
-$path = Join-Path $env:TEMP "ado-mcp-required-resource-access.json"
-$required | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $path -Encoding utf8
-az ad app update --id $clientAppId --required-resource-accesses "@$path"
+az ad sp show --id 2a72489c-aab2-4b65-b93a-a91edccf33b8 `
+  --query "{appId:appId,scopes:oauth2PermissionScopes}"
 ```
 
-Grant admin consent if tenant policy requires it:
+For tenants exposing `Ado.Mcp.Tools`, select that delegated permission on the client app and grant consent as required by tenant policy. If the permission is unavailable or the resource rejects the client, resolve that with the tenant/resource administrator; deploying APIM does not enable it.
+
+Verify the client configuration:
 
 ```powershell
-az ad app permission admin-consent --id <VS_CODE_PUBLIC_CLIENT_ID>
+az ad app show --id <public-client-app-id> `
+  --query "{appId:appId,displayName:displayName,publicClient:publicClient,requiredResourceAccess:requiredResourceAccess}"
 ```
 
-Verify the public client redirects:
-
-```powershell
-az ad app show --id <VS_CODE_PUBLIC_CLIENT_ID> `
-  --query "{appId:appId,displayName:displayName,publicClient:publicClient}"
-```
+The APIM `/register` endpoint returns this **existing client ID**; it does not dynamically create a registration or validate the submitted registration body.
 
 ## VS Code configuration
 
-After deployment, get the APIM-hosted MCP proxy URL:
+After following the [deployment guide](docs/deployment-guide.md), get the supported HTTP proxy URL:
 
 ```powershell
 azd env get-value ADO_REMOTE_MCP_PROXY_URL
 ```
 
-Use that value in VS Code. The final configuration should look like this:
+Run **MCP: Open User Configuration** from the VS Code Command Palette and add this server. Merge it into an existing `servers` object rather than replacing other entries:
 
 ```json
 {
@@ -146,271 +96,50 @@ Use that value in VS Code. The final configuration should look like this:
 }
 ```
 
-Do not configure `oauth.clientId` for this proxy. APIM exposes a minimal OAuth compatibility facade for VS Code at `/.well-known/oauth-authorization-server`, `/register`, `/authorize`, and `/token`. The facade returns the configured `VS_CODE_PUBLIC_CLIENT_ID` during Dynamic Client Registration, then redirects/token-exchanges against Microsoft Entra for the hosted Azure DevOps MCP resource. That public-client app must include the VS Code redirect URIs `http://127.0.0.1:33418/` and `https://vscode.dev/redirect`. The OAuth resource is `https://mcp.dev.azure.com`; the backend MCP URL still includes the organization path. APIM forwards the resulting delegated user token unchanged to Azure DevOps.
+Replace the URL with the exact deployment output. This configuration uses the APIM registration facade; do not add an `oauth.clientId` override to this example. The resource audience is `https://mcp.dev.azure.com`, while the backend URL includes the organization path.
 
-### Why this uses the HTTP proxy instead of APIM native MCP
-
-This repository keeps the plain APIM HTTP API proxy at `/ado-remote-mcp-proxy` as the supported VS Code endpoint. It also deploys an APIM native MCP passthrough experiment at `/ado-remote-mcp-experiment/mcp`, but that endpoint is for comparison only and should not be used as the VS Code configuration.
-
-The APIM native MCP resource must be wired to the hosted Azure DevOps MCP server through an APIM backend connection, not only a service URL:
-
-```text
-backendId: ado-remote-mcp-experiment-backend
-backend URL: https://mcp.dev.azure.com
-endpoint key: mcp
-endpoint path: /<organization>
-```
-
-With that shape, APIM native MCP can initialize as `AzureDevOps.Mcp` and return the hosted Azure DevOps MCP tool catalog. However, it still fails real tool invocation. For example, `tools/call` for `core_list_projects` returns:
-
-```text
-VS30063: You are not authorized to access https://dev.azure.com.
-```
-
-The same delegated token succeeds when calling direct hosted Azure DevOps MCP and when calling through the APIM HTTP proxy. The limitation is therefore specific to APIM native MCP passthrough, not the token itself or the user's Azure DevOps permissions.
-
-The public `microsoft/azure-devops-mcp` repo confirms why this is a blocker: Azure DevOps MCP tools create authenticated Azure DevOps REST clients, or send direct authenticated REST requests, at tool invocation time. That means auth must be preserved beyond `initialize` and `tools/list`; the runtime delegated bearer token must reach the downstream Azure DevOps REST call. APIM HTTP proxy preserves that behavior by forwarding MCP JSON-RPC traffic transparently to `https://mcp.dev.azure.com/<organization>`. APIM native MCP currently does not preserve the required delegated-token semantics end to end for hosted Azure DevOps MCP tool calls.
-
-Use the HTTP proxy endpoint for VS Code:
-
-```powershell
-azd env get-value ADO_REMOTE_MCP_PROXY_URL
-```
-
-### Add the server in VS Code
-
-1. Open VS Code.
-2. Press `Ctrl+Shift+P` to open the Command Palette.
-3. Run **MCP: Open User Configuration**.
-4. Add the `ado-mcp-apim-proxy` server entry shown above. If the file already has a `servers` object, add only the inner server entry instead of replacing the whole file.
-5. Replace `https://<apim-host>/ado-remote-mcp-proxy` with the exact `ADO_REMOTE_MCP_PROXY_URL` output.
-6. Save the file.
-7. Press `Ctrl+Shift+P` again.
-8. Run **MCP: List Servers**.
-9. Select `ado-mcp-apim-proxy`.
-10. Choose **Start Server** or **Restart Server**.
-11. When VS Code prompts for authentication, sign in with the Microsoft Entra account that has access to the Azure DevOps organization.
-12. After sign-in completes, open GitHub Copilot Chat, switch to **Agent** mode, and open the tools picker to confirm Azure DevOps tools are available.
-
-### Test prompts
-
-Try simple read-only prompts first:
+Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and start or restart it. Sign in with an Entra account authorized for the organization. In Copilot Chat's **Agent** mode, inspect the available tools and try a read-only request such as:
 
 ```text
 List the Azure DevOps projects I can access.
 ```
 
-```text
-Show my assigned work items.
-```
+Tool discovery is not proof of working authorization: also invoke a read-only tool against a project you can access. See the [verification steps](docs/deployment-guide.md#verify-the-deployment).
+
+## Configuration and limitations
+
+The complete environment-variable and Bicep parameter reference is in the [deployment guide](docs/deployment-guide.md#configuration-reference).
+
+- Defaults are `centralus`, APIM `Developer` with one unit, 60 calls per 60 seconds per client IP on the MCP policies, 100% diagnostic sampling, and 30-day workspace retention. The parameter file explicitly requires environment values for these settings; do not assume Bicep defaults populate missing azd values.
+- Allowed regions are `centralus`, `westus3`, and `canadacentral`. Allowed SKUs are `Developer`, `StandardV2`, and `PremiumV2`; `BasicV2` is not accepted. Developer is for development/testing, not a production SLA.
+- Bicep defaults `hostedAdoMcpReadOnly` to `true` and `hostedAdoMcpToolsets` to `all`. These parameters are **not mapped to azd environment variables** in the checked-in parameter file.
+- Read-only/toolset behavior is requested through upstream headers, not implemented as an APIM tool-level authorization check. The policy does not parse JSON-RPC or authorize individual tools; Azure DevOps remains the authorization boundary.
+- Only MCP `POST` is defined on the HTTP proxy. There are no proxy `GET`, `DELETE`, or `OPTIONS` operations, no separate SSE listener, and no CORS policy. Do not assume complete Streamable HTTP session management or arbitrary browser-client support.
+- The native MCP experiment uses a separate APIM backend connection. Its policy still points `401` discovery at the HTTP proxy's resource metadata. Do not substitute `ADO_REMOTE_MCP_EXPERIMENT_URL` for the supported VS Code endpoint without independent authentication and tool-call checks.
+- Static compilation currently warns about the experiment's `backendId` and `mcpProperties.endpoints` shape. Compilation is not evidence that Azure accepts those preview resources or that native MCP tool calls work. The experiment is part of every provision operation, so a rejection can affect the overall deployment.
+- The APIs require no APIM subscription key, and the gateway has public network access with no VNet integration. The OAuth facade does not use the MCP rate-limit/header-hygiene policy or inherit inbound global policies through `<base />`.
+- Zero body/header diagnostic capture is not a guarantee of zero sensitive telemetry. Request URLs and other telemetry may still be recorded, and existing/inherited APIM policies can affect behavior. Review logging before production use.
+
+## Troubleshooting
+
+For an unauthenticated proxy POST, expect a `401` challenge referring to:
 
 ```text
-What pull requests require my review?
+https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy
 ```
 
-If tools do not appear, run **MCP: List Servers**, restart `ado-mcp-apim-proxy`, and reload the VS Code window.
+If VS Code reports **Dynamic Client Registration not supported**, check the deployed discovery and `/register` routes first. It can also indicate stale client discovery state; it is not proof of a cache problem.
 
-### Troubleshoot stale OAuth discovery
+Stop old entries for the same APIM host with **MCP: List Servers**, keep only the current configuration, remove old `oauth` overrides, and run **MCP: Reset Trust** if available in your VS Code version. Then run **Developer: Reload Window** and restart the server. A new server ID can help isolate old state. Avoid editing VS Code's internal state databases.
 
-If VS Code shows **Dynamic Client Registration not supported** and names the authorization server as your APIM root, for example `https://<apim-host>/`, VS Code is using stale OAuth discovery from an older MCP entry or the `/register` operation has not been deployed. The current proxy should challenge with APIM-hosted resource metadata:
+For sign-in failures, check the configured tenant, public client redirects, resource permission/consent, and the error returned by Entra. For tool-call failures after sign-in, check Azure DevOps project permissions and compare with the direct hosted endpoint. Do not infer successful tool invocation from a successful `initialize` or `tools/list`.
 
-```text
-WWW-Authenticate: Bearer resource_metadata="https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy"
-```
+The MCP policies overwrite `X-MCP-Toolsets` but do not remove a caller's `X-MCP-Tools` header. Microsoft documents those headers as mutually exclusive; do not send `X-MCP-Tools` with this configuration. Consult the [upstream troubleshooting guide](https://learn.microsoft.com/azure/devops/mcp-server/remote-mcp-server-troubleshooting?view=azure-devops) for current hosted-server requirements.
 
-Use this reset sequence:
+## Validation and costs
 
-1. Select **Cancel** in the Dynamic Client Registration dialog.
-2. Press `Ctrl+Shift+P`.
-3. Run **MCP: List Servers**.
-4. Stop or disable any old MCP entries for the same APIM host.
-5. Run **MCP: Reset Trust**.
-6. Open **MCP: Open User Configuration** and make sure only the current proxy entry remains for this APIM host. Remove any `oauth` block from this server entry.
-7. Rename the server ID if needed, for example from `azure-devops-hosted-via-apim` to `ado-mcp-apim-proxy`, so VS Code treats it as a new MCP server.
-8. Run **Developer: Reload Window**.
-9. Run **MCP: List Servers**, select `ado-mcp-apim-proxy`, and choose **Start Server**.
+Run `pwsh -NoLogo -NoProfile -File .\tests\Validate-Plan.ps1` from a normal checkout. It checks JSON/XML/PowerShell syntax, compiles Bicep using Azure CLI, and runs text/hygiene checks. It does not deploy resources, validate APIM policy expressions in Azure, or test OAuth or MCP tool calls.
 
-Do not click **Copy URIs & Proceed** for this proxy unless you intentionally want to register and manage your own OAuth public client. The expected flow uses APIM's `/register` compatibility response and should not require manual client registration.
+**Validator path limitation:** its exclusion regexes match the entire absolute path. A checkout anywhere under a directory named `.copilot`, `.azure`, `.github`, or another excluded name can skip source enumeration and produce misleading results (including a zero-file hygiene pass and failed content checks). Run the same script from a checkout outside those paths; do not treat a zero-file pass as validation. See the [deployment guide](docs/deployment-guide.md#validate-and-provision) for expected checks.
 
-#### Where VS Code stores stale MCP auth state
-
-VS Code persists MCP trust, dynamic OAuth providers, client registrations, and per-workspace MCP usage in SQLite state databases under the user profile:
-
-```text
-%APPDATA%\Code\User\globalStorage\state.vscdb
-%APPDATA%\Code\User\workspaceStorage\<workspace-id>\state.vscdb
-```
-
-On this machine those expand to paths like:
-
-```text
-C:\Users\<user>\AppData\Roaming\Code\User\globalStorage\state.vscdb
-C:\Users\<user>\AppData\Roaming\Code\User\workspaceStorage\<workspace-id>\state.vscdb
-```
-
-The stale rows we found were in the `ItemTable` table. Relevant keys/prefixes included:
-
-```text
-dynamicAuthProviders
-secret://dynamicAuthProvider:clientRegistration:<authorization-server> <mcp-server-url>
-secret://{"isDynamicAuthProvider":true,...}
-mcpserver-<authorization-server> <mcp-server-url>-<account>
-mcp.config.<scope>.<server-name>-<authorization-server> <mcp-server-url>
-<authorization-server> <mcp-server-url>-<account>-mcpserver-usages
-```
-
-If Command Palette reset steps do not clear the issue, close VS Code fully, back up the `state.vscdb` files, and remove only rows containing the affected APIM hostname. Do not delete unrelated rows unless you are intentionally resetting broader VS Code state.
-
-## Configuration
-
-Required azd values:
-
-```powershell
-azd env set AZURE_LOCATION centralus
-azd env set AZURE_DEVOPS_ORGANIZATION <organization-name>
-azd env set AZURE_TENANT_ID <tenant-id>
-azd env set VS_CODE_PUBLIC_CLIENT_ID <public-client-app-id>
-azd env set APIM_PUBLISHER_NAME <publisher-name>
-azd env set APIM_PUBLISHER_EMAIL <publisher-email>
-azd env set APIM_SKU_NAME Developer
-azd env set APIM_CAPACITY 1
-azd env set MCP_RATE_LIMIT_CALLS 60
-azd env set MCP_RATE_LIMIT_PERIOD 60
-azd env set DIAGNOSTIC_SAMPLING_PERCENTAGE 100
-azd env set LOG_ANALYTICS_RETENTION_DAYS 30
-```
-
-Optional Bicep parameters:
-
-| Parameter | Default | Purpose |
-|---|---:|---|
-| `hostedAdoMcpReadOnly` | `true` | Sends `X-MCP-Readonly: true` to Azure DevOps |
-| `hostedAdoMcpToolsets` | `all` | Sends `X-MCP-Toolsets` to Azure DevOps |
-
-## Cost estimate
-
-The table below assumes **Central US** (`centralus` / US Central), one APIM unit, 730 hours per month, USD retail pricing, and the default deployment shape in this repository. Actual cost can vary by discounts, commitment plans, traffic, telemetry volume, retention, taxes, and future Azure price changes.
-
-| Resource | Default in this repo | Central US retail meter used | Approx monthly cost |
-|---|---:|---:|---:|
-| API Management Developer | Yes | `$0.0658/hour` | `$48.03/month` |
-| Log Analytics ingestion | Usage-based | `$0` for the initial tier shown by the retail API, then `$2.76/GB` above that tier | Depends on GB ingested |
-| Log Analytics retention | 30 days | Included for the default 30-day retention used here | `$0` for default retention |
-| Application Insights | Workspace-based | Data is billed through Log Analytics ingestion/retention | Depends on telemetry volume |
-
-For quick planning:
-
-| APIM SKU option | Central US hourly rate | Approx monthly cost at 730 hours | Notes |
-|---|---:|---:|---|
-| Developer | `$0.0658/hour` | `$48.03/month` | Lowest-cost test/dev option; not intended for production SLA. |
-| Basic v2 | `$0.20548/hour` | `$150.00/month` | Lower-cost managed gateway option for small workloads. |
-| Standard v2 | `$0.9589/hour` | `$700.00/month` | More appropriate production starting point for many internal deployments. |
-| Premium v2 | `$3.83562/hour` | `$2,800.00/month` | Higher isolation/scale option. |
-
-This proxy has no application backend compute cost because it does not deploy a web app, container app, function app, registry, database, or queue. The dominant fixed cost is APIM. The variable cost is usually observability data volume.
-
-## Deploy
-
-```powershell
-pwsh -NoLogo -NoProfile -File .\tests\Validate-Plan.ps1
-azd provision --no-prompt
-```
-
-## Verify
-
-Unauthenticated MCP initialize should return a `401` with the hosted Azure DevOps MCP protected-resource metadata:
-
-```powershell
-$url = azd env get-value ADO_REMOTE_MCP_PROXY_URL
-Invoke-WebRequest `
-  -Uri $url `
-  -Method Post `
-  -Body '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"validation","version":"1.0"}}}' `
-  -ContentType 'application/json' `
-  -Headers @{ Accept = 'application/json, text/event-stream' } `
-  -SkipHttpErrorCheck
-```
-
-The `WWW-Authenticate` response should point at the APIM-hosted resource metadata:
-
-- `https://<apim-host>/.well-known/oauth-protected-resource/ado-remote-mcp-proxy`
-
-## Policy reference
-
-The solution has two APIM policy files. They are deliberately small because APIM should govern the edge and preserve the user's Azure DevOps authentication context, not become a custom Azure DevOps client.
-
-### `infra/policies/ado-remote-mcp-policy.xml`
-
-This policy is attached to the `/ado-remote-mcp-proxy` API. It governs calls to the hosted Azure DevOps MCP endpoint.
-
-| Line(s) | Policy | Why it is needed |
-|---:|---|---|
-| 1 | `<policies>` | Root APIM policy document element. APIM rejects policy files without this wrapper. |
-| 2 | `<inbound>` | Starts policy logic that runs before the request is sent to Azure DevOps. All request validation and request header shaping belongs here. |
-| 3 | `<base />` | Preserves any APIM global policy behavior. Without it, API-level policy would replace inherited global controls. |
-| 4 | `<choose>` | Creates a conditional block for request validation. |
-| 5 | HTTPS scheme check | Rejects any request APIM sees as non-HTTPS. Remote MCP authentication and bearer tokens must not be accepted over plain HTTP. |
-| 6 | `<return-response>` | Stops processing immediately when the HTTPS requirement fails. |
-| 7 | `400 HTTPS Required` | Returns a clear client error instead of forwarding an invalid request to Azure DevOps. |
-| 8 | `Cache-Control: no-store` | Prevents clients or intermediaries from caching an error response related to an authenticated endpoint. |
-| 9-11 | Close HTTPS validation block | Ends the early rejection branch and resumes normal processing for HTTPS requests. |
-| 12 | `set-variable correlation-id` | Creates a safe correlation ID that APIM can echo back without logging user data. |
-| 13 | Read `X-Correlation-ID` | Lets a trusted test client provide a correlation ID for troubleshooting. |
-| 14 | `Guid parsed;` | Ensures only GUID-formatted values are accepted. |
-| 15 | `Guid.TryParse...` fallback | Uses the supplied GUID if valid; otherwise falls back to APIM's request ID. This avoids header injection or arbitrary tracking values. |
-| 16 | Close correlation variable | Ends the APIM C# expression block. |
-| 17-19 | `rate-limit-by-key` | Applies a configurable per-IP rate limit before traffic reaches Azure DevOps. `Retry-After` helps clients back off correctly. |
-| 20 | `X-MCP-Readonly` | Sends the configured read-only setting to the hosted Azure DevOps MCP endpoint. The default is `true` so tool discovery excludes mutating tools. |
-| 21 | `<choose>` | Starts optional toolset filtering logic. |
-| 22 | Toolsets non-empty check | Only sends `X-MCP-Toolsets` when the configured value exists. This avoids emitting an empty governance header. |
-| 23 | `X-MCP-Toolsets` | Restricts which Azure DevOps MCP tool groups are available, for example `repos,wit,pipelines` or `all`. |
-| 24-25 | Close toolset block | Ends optional toolset header logic. |
-| 26 | Delete `Forwarded` | Removes client-supplied forwarding metadata that could spoof original protocol, host, or client chain. |
-| 27 | Delete `X-Forwarded-For` | Prevents callers from spoofing client IP data forwarded to the backend. |
-| 28 | Delete `X-Forwarded-Host` | Prevents callers from spoofing the original host. |
-| 29 | Delete `X-Forwarded-Proto` | Prevents callers from spoofing the original protocol. |
-| 30 | Delete `X-Forwarded-Port` | Prevents callers from spoofing the original port. |
-| 31 | Delete `X-Original-Host` | Removes another common original-host spoofing header. |
-| 32 | Delete `X-Original-URL` | Removes a common upstream rewrite/original URL header. |
-| 33 | Delete `X-Rewrite-URL` | Removes a common rewrite-target spoofing header. |
-| 34 | Delete `Proxy-Authorization` | Ensures proxy credentials are never forwarded to Azure DevOps. |
-| 35 | Delete `Proxy-Connection` | Removes hop-by-hop proxy behavior that should not reach the backend. |
-| 36 | Delete `X-MS-CLIENT-PRINCIPAL` | Prevents callers from spoofing platform-injected identity headers. |
-| 37 | Delete `X-MS-CLIENT-PRINCIPAL-ID` | Prevents callers from spoofing a platform principal ID. |
-| 38 | Delete `X-MS-TOKEN-AAD-ACCESS-TOKEN` | Prevents callers from smuggling an alternate platform token header. |
-| 39 | Delete `Ocp-Apim-Trace` | Prevents callers from enabling APIM tracing. |
-| 40 | Delete `Ocp-Apim-Trace-Location` | Prevents callers from providing or receiving trace location metadata. |
-| 41 | Set `X-Correlation-ID` | Sends only the normalized correlation ID downstream and back to clients. |
-| 42 | `</inbound>` | Ends request-side processing. |
-| 43 | `<backend>` | Starts backend forwarding behavior. |
-| 44 | `forward-request` options | Forwards to Azure DevOps without following redirects, request-body buffering, or response buffering. This is important for MCP streamable HTTP behavior and auth challenge preservation. |
-| 45 | `</backend>` | Ends backend forwarding behavior. |
-| 46 | `<outbound>` | Starts response-side processing after Azure DevOps responds. |
-| 47 | `<base />` | Preserves inherited outbound policies. |
-| 48-54 | 401 challenge rewrite | Points VS Code to APIM-hosted protected-resource metadata for this proxy. This is required because VS Code performs OAuth discovery against the APIM hostname when the MCP server URL is an APIM URL. |
-| 55 | `Cache-Control: no-store` | Prevents caching of MCP responses and authentication challenges. |
-| 56 | Set `X-Correlation-ID` | Echoes the normalized correlation ID on successful and error responses. |
-| 57 | `</outbound>` | Ends response-side processing. |
-| 58 | `<on-error>` | Starts policy logic for APIM-side failures. |
-| 59 | `<base />` | Preserves inherited error handling. |
-| 60 | `Cache-Control: no-store` | Prevents APIM-generated errors from being cached. |
-| 61-63 | Error `X-Correlation-ID` | Returns the normalized correlation ID if available; otherwise returns APIM's request ID. |
-| 64 | `</on-error>` | Ends APIM error handling. |
-| 65 | `</policies>` | Ends the APIM policy document. |
-
-### `infra/policies/ado-remote-mcp-oauth-policy.xml`
-
-This policy is attached to the APIM root metadata and OAuth compatibility operations. It exists because VS Code treats the APIM origin as the MCP authorization server when the MCP server URL is hosted behind APIM.
-
-| Line(s) | Policy | Why it is needed |
-|---:|---|---|
-| 1 | `<policies>` | Root APIM policy document element. |
-| 2 | `<inbound>` | Handles metadata, registration, authorization, and token requests before APIM routes to a backend. |
-| 3 | `<choose>` | Dispatches behavior based on the requested OAuth path. |
-| 4-16 | Protected-resource metadata branch | Returns metadata for `/ado-remote-mcp-proxy`, advertising the hosted Azure DevOps MCP resource and APIM as the authorization server facade. |
-| 17-34 | Authorization-server metadata branch | Returns RFC-style authorization server metadata, including `/authorize`, `/token`, `/register`, PKCE support, and public-client auth mode. |
-| 35-50 | Dynamic Client Registration branch | Returns the configured tenant public-client ID and VS Code redirect URIs so VS Code does not require manual client registration. |
-| 51-73 | Authorization redirect branch | Redirects browser sign-in to the tenant-specific Microsoft Entra authorize endpoint, preserving VS Code's PKCE/state parameters and adding the hosted Azure DevOps MCP scope/resource when missing. |
-| 74-91 | Token exchange branch | Forwards the authorization-code token exchange to the tenant-specific Microsoft Entra token endpoint, again ensuring the hosted Azure DevOps MCP scope/resource are present. |
-| 92-97 | Default 404 branch | Rejects any unexpected path on the OAuth facade. |
-| 100-102 | Backend/outbound/error sections | Required APIM policy sections; backend forwarding is only used by the `/token` branch after it rewrites the backend to Microsoft Entra. |
+APIM is the primary fixed infrastructure cost; Log Analytics/Application Insights add usage-based telemetry costs. This repository contains no pricing lookup or cost validation. Use the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) for the chosen supported SKU, region, capacity, ingestion, and retention rather than relying on a fixed monthly estimate. The experiment and OAuth facade use the same APIM service, not separate gateway instances.
