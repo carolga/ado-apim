@@ -1,5 +1,13 @@
 # Azure DevOps MCP through Azure API Management
 
+## Optional Foundry and private-CA demos
+
+See [Foundry OAuth and private-CA repro](docs/foundry-private-ca-demo.md) for a
+separate, opt-in demo environment and read-only diagnostics. It compares direct
+hosted ADO MCP, the HTTP proxy, and APIM-native MCP, then adds a private-CA gateway
+certificate and Foundry trust registration. This is server-certificate trust,
+not mutual TLS. The existing `azure.yaml` deployment is unchanged.
+
 This repository deploys one working implementation:
 
 ```text

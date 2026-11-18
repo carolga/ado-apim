@@ -26,6 +26,16 @@ param capacity int
 @description('Application Insights connection string used by the APIM logger.')
 param applicationInsightsConnectionString string
 
+@description('Optional private-CA gateway hostname for an isolated repro. Empty preserves the default gateway configuration.')
+param gatewayHostname string = ''
+
+@secure()
+@description('Base64-encoded password-protected gateway PFX. Never supply the CA private key.')
+param gatewayCertificateData string = ''
+
+@secure()
+param gatewayCertificatePassword string = ''
+
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: name
   location: location
@@ -47,6 +57,18 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
     publisherEmail: publisherEmail
     publisherName: publisherName
     virtualNetworkType: 'None'
+    ...(!empty(gatewayHostname) ? {
+      hostnameConfigurations: [
+        {
+          type: 'Proxy'
+          hostName: gatewayHostname
+          encodedCertificate: gatewayCertificateData
+          certificatePassword: gatewayCertificatePassword
+          negotiateClientCertificate: false
+          defaultSslBinding: false
+        }
+      ]
+    } : {})
   }
 }
 
@@ -67,3 +89,4 @@ output name string = apim.name
 output id string = apim.id
 output gatewayUrl string = apim.properties.gatewayUrl
 output loggerId string = applicationInsightsLogger.id
+output publicIpAddresses array = apim.properties.publicIPAddresses ?? []

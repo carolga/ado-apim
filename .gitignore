@@ -32,3 +32,10 @@
 # .NET build outputs
 **/bin/
 **/obj/
+
+# Private repro certificates, build output, and diagnostic evidence
+/.local/
+__pycache__/
+*.pfx
+*.p12
+*.key

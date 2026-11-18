@@ -69,17 +69,17 @@ try {
     Required 'infra\policies\ado-remote-mcp-policy.xml' | Out-Null
 
     foreach ($json in Get-ChildItem $repoRoot -Recurse -File -Filter '*.json' |
-        Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|bin|obj)\\') {
+        Where-Object { (Rel $_.FullName) -notmatch '(^|\\)(?:\.git|\.github|\.azure|\.copilot|\.squad|\.local|bin|obj)\\' }) {
         try { Text $json.FullName | ConvertFrom-Json -Depth 100 | Out-Null; Pass "$(Rel $json.FullName) parses as JSON" }
         catch { Fail "$(Rel $json.FullName) JSON parse error: $($_.Exception.Message)" }
     }
     foreach ($xml in Get-ChildItem $repoRoot -Recurse -File -Filter '*.xml' |
-        Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|bin|obj)\\') {
+        Where-Object { (Rel $_.FullName) -notmatch '(^|\\)(?:\.git|\.github|\.azure|\.copilot|\.squad|\.local|bin|obj)\\' }) {
         try { [xml](Text $xml.FullName) | Out-Null; Pass "$(Rel $xml.FullName) parses as XML" }
         catch { Fail "$(Rel $xml.FullName) XML parse error: $($_.Exception.Message)" }
     }
     foreach ($ps1 in Get-ChildItem $repoRoot -Recurse -File -Filter '*.ps1' |
-        Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|bin|obj)\\') { Parse-PowerShell $ps1.FullName }
+        Where-Object { (Rel $_.FullName) -notmatch '(^|\\)(?:\.git|\.github|\.azure|\.copilot|\.squad|\.local|bin|obj)\\' }) { Parse-PowerShell $ps1.FullName }
 
     $az = Get-Command az -ErrorAction SilentlyContinue
     if ($az) {
@@ -93,14 +93,14 @@ try {
     }
 
     $files = Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Force |
-        Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|artifacts|bin|obj|node_modules)\\' |
+        Where-Object { (Rel $_.FullName) -notmatch '(^|\\)(?:\.git|\.github|\.azure|\.copilot|\.squad|\.local|artifacts|bin|obj|node_modules)\\' } |
         Where-Object { $_.Extension -in @('.bicep','.json','.md','.ps1','.xml','.yaml','.yml') -or $_.Name -in @('.gitattributes','.gitignore') }
     $issues = @($files | ForEach-Object { Get-SourceHygieneIssues ([IO.File]::ReadAllBytes($_.FullName)) (Rel $_.FullName) })
     if ($issues.Count -eq 0) { Pass "repository source hygiene passes direct scan ($($files.Count) files)" }
     else { Fail "repository source hygiene failed: $($issues -join '; ')" }
 
     $implementationText = (Get-ChildItem $repoRoot -Recurse -File |
-        Where-Object FullName -notmatch '\\(?:\.git|\.github|\.azure|\.copilot|\.squad|tests|bin|obj)\\' |
+        Where-Object { (Rel $_.FullName) -notmatch '(^|\\)(?:\.git|\.github|\.azure|\.copilot|\.squad|\.local|tests|bin|obj)\\' } |
         Where-Object Extension -in @('.bicep','.json','.md','.ps1','.xml','.yaml','.yml') |
         ForEach-Object { Text $_.FullName }) -join "`n"
 
