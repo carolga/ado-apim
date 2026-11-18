@@ -4,10 +4,10 @@ These are opt-in diagnostic demos, not a production reference architecture or a
 claim that a certificate change causes an OAuth regression. Local compilation and
 offline tests do not establish that the Azure deployment or OAuth flow succeeds.
 
-The customer topology reproduced here is an MCP tool attached directly to a
-Foundry agent with OAuth identity passthrough. It is not a Foundry IQ knowledge
-source. Registering `trustedCertificateSources` trusts a server's private CA; it
-does not configure client-certificate authentication (mTLS).
+This demo attaches an MCP tool directly to a Foundry agent with OAuth identity
+passthrough. It does not reproduce an MCP Server knowledge source in Foundry IQ.
+Registering `trustedCertificateSources` trusts a server's private CA; it does not
+configure client-certificate authentication (mTLS).
 
 ## Demos and controls
 
@@ -17,6 +17,7 @@ does not configure client-certificate authentication (mTLS).
 | Foundry OAuth inspection | Print consent-event and tool-call summaries outside the playground without dumping tool catalogs or project contents. |
 | Private-CA gateway | Add a disposable, encrypted server certificate on a private DNS hostname while retaining APIM's public-CA default hostname. |
 | Foundry CA registration | Upload only the public CA PEM to Key Vault and merge a version-pinned trust reference without discarding unrelated references. |
+| Private jumpbox | Optionally access the private project from a Windows VM through Azure Bastion. |
 
 `initialize` and `tools/list` succeeding is not sufficient. The comparison must
 invoke `core_list_projects`. The README records a native-MCP failure with
@@ -31,6 +32,12 @@ subscription pricing; the other Foundry, Search, Cosmos DB, networking, Key Vaul
 and logging resources also incur charges. ACR is disabled and model deployment
 is skipped by default. There is no automatic shutdown or deletion.
 
+The optional jumpbox adds a Windows VM and disk, Standard Bastion, a NAT gateway,
+and two public IP addresses. These incur additional charges; Bastion and NAT remain
+billable even if the VM is deallocated. The VM has no public IP. Bastion exposes
+an HTTPS access gateway, while NAT provides outbound connectivity, not an egress
+firewall.
+
 The dedicated template is `infra\repro\main.bicep`; it is not referenced by
 `azure.yaml`. It links the Microsoft network-secured Standard Agent Setup ARM
 sample at a fixed commit, rather than copying and maintaining its capability-host
@@ -40,10 +47,16 @@ implementation. Review that upstream template before deployment:
 
 The foundation creates a VNet-injected Foundry account/project, private endpoints,
 DNS, backing services, and monitoring. Additional APIM diagnostics use this repo's
-existing observability module. Foundry ingress remains private: a VPN, peered
-network, or approved VNet-connected workstation is required to run the agent
-diagnostic and use the playground. This demo does not provision that workstation
-or change organizational access policies.
+existing observability module. Foundry ingress remains private. Enable the
+optional jumpbox on the first deployment, or use an approved VPN, peered network,
+or other VNet-connected workstation to run the agent diagnostic and playground.
+The demo does not change organizational access policies.
+
+With the jumpbox enabled, the template creates the VNet and its subnets before the
+Foundry foundation, which reuses them without replacing them. The agent and jumpbox
+subnets share outbound NAT so they can reach the internet-facing APIM gateway.
+The jumpbox NSG allows inbound RDP only from the Bastion subnet. Ensure all four
+subnet ranges are non-overlapping and inside the VNet address space.
 
 The APIM service remains internet-facing. A private DNS name, by default
 `mcp.repro.test`, resolves to its gateway IP inside the demo VNet. Private DNS does
@@ -91,6 +104,10 @@ az ad signed-in-user show --query id -o tsv
 
 Edit `.local\repro\parameters.json`. Supply the operator's object ID, publisher
 details, public-client app ID, and ADO organization as one name, not a URL.
+To provision the jumpbox, set `deployJumpbox` to `true` **before the first
+foundation deployment**, in a new resource group. Do not enable it against an
+already deployed foundation: its network must be created with the jumpbox subnets
+and NAT before the agent subnet is in use.
 The CLI public-client app needs delegated **Azure DevOps MCP / Ado.Mcp.Tools**
 permission and public-client/device-code authentication enabled. Follow the main
 README for the resource enterprise application and consent requirements.
@@ -99,7 +116,9 @@ The provisioning operator needs resource deployment and role-assignment
 permissions, plus any data-plane provisioning roles required by the pinned
 foundation. Check the current Foundry Standard Setup documentation. The template
 grants the operator Key Vault Secrets Officer and the Foundry account identity
-Key Vault Secrets User on the demo vault. The vault is publicly reachable with
+Key Vault Secrets User on the demo vault. When the jumpbox is enabled, it also
+grants the operator Foundry User on the demo project and Virtual Machine
+Administrator Login on the jumpbox. The vault is publicly reachable with
 Entra/RBAC authorization; do not use it to store customer or production secrets.
 
 For runtime agent tests, explicitly set `skipModelDeployment` to `false` after
@@ -120,11 +139,35 @@ az deployment group show --subscription $subscription --resource-group $rg `
   --name ado-foundry-repro --query properties.outputs -o json
 ```
 
-Save the returned endpoints and resource IDs. Set `deployFoundation` to `false`
-in local parameters for subsequent gateway experiments, so the linked foundation
-does not reprovision or overwrite account settings. Do not retry a partially
-failed capability-host deployment against a stuck delegated subnet; diagnose it
-first and use a fresh isolated VNet/subnet when required by the platform.
+What-if may not fully evaluate the linked foundation. Review and preview it
+separately, and inspect any identity-dependent resources reported as
+`Unsupported`. Validation and what-if don't guarantee that every resource
+provider will accept the deployment. Save the returned endpoints and resource
+IDs. Set both `deployFoundation` and `deployJumpbox` to `false` in local
+parameters for subsequent gateway experiments, so the linked foundation and VM
+are not reprovisioned. Incremental deployment leaves the existing jumpbox in
+place. Do not retry a partially failed capability-host deployment against a
+stuck delegated subnet; diagnose it first and use a fresh isolated VNet/subnet
+when required by the platform.
+
+## Connect to the optional jumpbox
+
+In the Azure portal, open the VM identified by the `jumpboxVmName` output and
+select **Connect > Bastion**. Choose RDP and **Microsoft Entra ID (Preview)**,
+then sign in as the operator. Portal access also requires Reader on the VM, NIC,
+and Bastion; an inherited Contributor or Owner assignment satisfies this.
+Entra RDP in the portal is preview and remains subject to tenant MFA and
+Conditional Access. Allow browser pop-ups for `cdn.bastion.azure.com` if needed.
+
+The VM uses the `AADLoginForWindows` extension and has no public IP. Its required
+local administrator password is generated by ARM as a secure parameter and is
+not output; use Entra to sign in. If Entra login fails, diagnose the extension
+and role assignments or use an authorized VM password reset rather than exposing
+RDP. The image does not install this repo's Python dependencies or Azure CLI;
+install approved tooling and obtain the repo inside the VM before running the
+diagnostic. Verify that the Foundry project hostname resolves to its private
+endpoint from the VM. The `mcp.repro.test` record resolves to APIM's **public**
+gateway IP, even though its DNS zone is private.
 
 ## Demo 1: compare all three MCP paths
 
@@ -208,6 +251,7 @@ $path = Join-Path $PWD ".local\repro\parameters.json"
 $parameters = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
 $password = Read-Host "Gateway PFX password" -AsSecureString
 $parameters.parameters.deployFoundation.value = $false
+$parameters.parameters.deployJumpbox.value = $false
 $parameters.parameters.enablePrivateCaGateway.value = $true
 $parameters.parameters.gatewayCertificateData = @{
   value = [Convert]::ToBase64String([IO.File]::ReadAllBytes(
@@ -284,3 +328,5 @@ sanitized results first; Key Vault soft deletion can keep a vault name reserved.
 - [APIM MCP tiers](https://learn.microsoft.com/azure/api-management/mcp-server-overview)
 - [APIM custom domains and certificates](https://learn.microsoft.com/azure/api-management/configure-custom-domain)
 - [APIM pricing](https://azure.microsoft.com/pricing/details/api-management/)
+- [Bastion Entra sign-in](https://learn.microsoft.com/azure/bastion/bastion-entra-id-authentication)
+- [Bastion pricing](https://azure.microsoft.com/pricing/details/azure-bastion/)

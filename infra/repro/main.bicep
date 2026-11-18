@@ -10,6 +10,9 @@ param location string = 'westus3'
 @description('Deploy the dedicated foundation initially; set false for subsequent gateway-only experiments.')
 param deployFoundation bool = true
 
+@description('Provision a private jumpbox and Bastion. Enable for the initial deployment in a new resource group.')
+param deployJumpbox bool = false
+
 @description('Enable the private-CA hostname only after generating its matching PFX.')
 param enablePrivateCaGateway bool = false
 
@@ -34,6 +37,8 @@ param gatewayHostLabel string = 'mcp'
 param vnetAddressPrefix string = '10.87.0.0/16'
 param agentSubnetPrefix string = '10.87.0.0/24'
 param peSubnetPrefix string = '10.87.1.0/24'
+param jumpSubnetPrefix string = '10.87.2.0/27'
+param bastionSubnetPrefix string = '10.87.3.0/26'
 
 @description('Leave true for infrastructure preparation; explicitly deploy a supported model before testing the Foundry agent.')
 param skipModelDeployment bool = true
@@ -53,6 +58,20 @@ var tags = {
   'managed-by': 'bicep'
 }
 
+module accessNetwork './access-network.bicep' = if (deployFoundation && deployJumpbox) {
+  name: 'ado-repro-access-network'
+  params: {
+    location: location
+    vnetName: vnetName
+    vnetAddressPrefix: vnetAddressPrefix
+    agentSubnetPrefix: agentSubnetPrefix
+    peSubnetPrefix: peSubnetPrefix
+    jumpSubnetPrefix: jumpSubnetPrefix
+    bastionSubnetPrefix: bastionSubnetPrefix
+    tags: tags
+  }
+}
+
 // Pinned Microsoft sample, rather than a second hand-maintained capability-host implementation.
 #disable-next-line no-deployments-resources
 resource foundation 'Microsoft.Resources/deployments@2022-09-01' = if (deployFoundation) {
@@ -70,6 +89,8 @@ resource foundation 'Microsoft.Resources/deployments@2022-09-01' = if (deployFou
       vnetAddressPrefix: { value: vnetAddressPrefix }
       agentSubnetPrefix: { value: agentSubnetPrefix }
       peSubnetPrefix: { value: peSubnetPrefix }
+      existingVnetResourceId: { value: deployJumpbox ? accessNetwork!.outputs.vnetResourceId : '' }
+      reuseExistingSubnets: { value: deployJumpbox }
       enableContainerRegistry: { value: false }
       createAccountCapabilityHost: { value: false }
       skipModelDeployment: { value: skipModelDeployment }
@@ -88,8 +109,35 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: vnetName
 }
 
+resource project 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview' existing = {
+  parent: foundry
+  name: projectName
+}
+
+module jumpbox './jumpbox.bicep' = if (deployJumpbox) {
+  name: 'ado-repro-jumpbox'
+  params: {
+    location: location
+    vnetName: vnetName
+    operatorObjectId: operatorObjectId
+    tags: tags
+  }
+  dependsOn: [foundation, accessNetwork]
+}
+
+resource operatorFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployJumpbox) {
+  name: guid(project.id, operatorObjectId, 'foundry-user')
+  scope: project
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '53ca6127-db72-4b80-b1b0-d745d6d5456d')
+    principalId: operatorObjectId
+    principalType: 'User'
+  }
+  dependsOn: [foundation]
+}
+
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: 'kv-ado-repro-${uniqueString(resourceGroup().id)}'
+  name: 'kv-ado-${uniqueString(resourceGroup().id)}'
   location: location
   tags: tags
   properties: {
@@ -205,3 +253,5 @@ output privateCaProxyUrl string = 'https://${gatewayHostname}/ado-remote-mcp-pro
 output privateCaNativeMcpUrl string = 'https://${gatewayHostname}/ado-remote-mcp-experiment/mcp'
 output privateCaGatewayEnabled bool = enablePrivateCaGateway
 output vnetResourceId string = vnet.id
+output jumpboxVmName string = deployJumpbox ? jumpbox!.outputs.vmName : ''
+output bastionName string = deployJumpbox ? jumpbox!.outputs.bastionName : ''

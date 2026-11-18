@@ -56,6 +56,92 @@ function Get-SourceHygieneIssues([byte[]]$Bytes, [string]$DisplayName) {
     @($issues)
 }
 
+function Get-ArmResource([object[]]$Resources, [string]$Type) {
+    $matches = @($Resources | Where-Object { $_.type -eq $Type })
+    if ($matches.Count -ne 1) { throw "Expected one $Type resource, found $($matches.Count)." }
+    return $matches[0]
+}
+
+function Test-ReproKeyVaultName([System.Collections.IDictionary]$Template) {
+    try {
+        $vault = Get-ArmResource $Template.resources 'Microsoft.KeyVault/vaults'
+        if ($vault.name -notmatch "^\[format\('([^']*)\{0\}', uniqueString\(resourceGroup\(\)\.id\)\)\]$") {
+            throw 'Unexpected Key Vault name expression.'
+        }
+        $name = $Matches[1] + ('a' * 13)
+        if ($name -cmatch '^[A-Za-z][A-Za-z0-9-]{1,22}[A-Za-z0-9]$' -and $name -notmatch '--') {
+            Pass 'repro Key Vault name satisfies Azure naming limits'
+        } else {
+            Fail 'repro Key Vault name violates Azure naming limits'
+        }
+    } catch {
+        Fail "Key Vault template inspection failed: $($_.Exception.Message)"
+    }
+}
+
+function Test-ReproJumpbox([System.Collections.IDictionary]$Template) {
+    try {
+        $networkDeployment = @($Template.resources | Where-Object name -eq 'ado-repro-access-network')
+        $jumpDeployment = @($Template.resources | Where-Object name -eq 'ado-repro-jumpbox')
+        $foundation = @($Template.resources | Where-Object name -eq 'ado-repro-foundation')
+        if ($networkDeployment.Count -ne 1 -or $jumpDeployment.Count -ne 1 -or $foundation.Count -ne 1) {
+            throw 'Jumpbox or foundation deployment was not found.'
+        }
+        $network = $networkDeployment[0].properties.template.resources
+        $jump = $jumpDeployment[0].properties.template.resources
+        $vnet = Get-ArmResource $network 'Microsoft.Network/virtualNetworks'
+        $nsg = Get-ArmResource $network 'Microsoft.Network/networkSecurityGroups'
+        $nic = Get-ArmResource $jump 'Microsoft.Network/networkInterfaces'
+        $vm = Get-ArmResource $jump 'Microsoft.Compute/virtualMachines'
+        $extension = Get-ArmResource $jump 'Microsoft.Compute/virtualMachines/extensions'
+        $loginRole = Get-ArmResource $jump 'Microsoft.Authorization/roleAssignments'
+        $agentSubnet = @($vnet.properties.subnets | Where-Object name -eq 'agent-subnet')
+        $jumpSubnet = @($vnet.properties.subnets | Where-Object name -eq 'jump')
+        $bastionSubnet = @($vnet.properties.subnets | Where-Object name -eq 'AzureBastionSubnet')
+        if ($agentSubnet.Count -ne 1 -or $jumpSubnet.Count -ne 1 -or $bastionSubnet.Count -ne 1) {
+            throw 'Expected agent, jumpbox, and Bastion subnets.'
+        }
+
+        $allow = @($nsg.properties.securityRules | Where-Object {
+            $_.properties.direction -eq 'Inbound' -and $_.properties.access -eq 'Allow'
+        })
+        $deny = @($nsg.properties.securityRules | Where-Object {
+            $_.properties.direction -eq 'Inbound' -and $_.properties.access -eq 'Deny' -and
+            $_.properties.sourceAddressPrefix -eq '*' -and $_.properties.destinationPortRange -eq '*'
+        })
+        $publicNic = @($nic.properties.ipConfigurations | Where-Object {
+            $_.properties.ContainsKey('publicIPAddress')
+        })
+        if ($allow.Count -eq 1 -and $deny.Count -eq 1 -and $publicNic.Count -eq 0 -and
+            $allow[0].properties.sourceAddressPrefix -eq "[parameters('bastionSubnetPrefix')]" -and
+            $allow[0].properties.destinationPortRange -eq '3389' -and
+            $allow[0].properties.priority -lt $deny[0].properties.priority -and
+            $jumpSubnet[0].properties.networkSecurityGroup.id) {
+            Pass 'jumpbox has no public IP and accepts inbound RDP only from Bastion'
+        } else { Fail 'jumpbox network isolation is incomplete' }
+
+        if ($Template.parameters.deployJumpbox.defaultValue -eq $false -and
+            $networkDeployment[0].condition -match "deployFoundation.*deployJumpbox" -and
+            $foundation[0].properties.parameters.reuseExistingSubnets.value -eq "[parameters('deployJumpbox')]" -and
+            $agentSubnet[0].properties.natGateway.id -eq $jumpSubnet[0].properties.natGateway.id -and
+            $agentSubnet[0].properties.natGateway.id -and
+            $agentSubnet[0].properties.delegations[0].properties.serviceName -eq 'Microsoft.App/environments') {
+            Pass 'opt-in foundation reuses preconfigured agent and jumpbox egress subnets'
+        } else { Fail 'jumpbox opt-in network or Foundry subnet wiring is incomplete' }
+
+        $password = $jumpDeployment[0].properties.template.parameters.localAdminPassword
+        if ($password.type -eq 'securestring' -and $password.defaultValue -match 'newGuid\(\)' -and
+            $vm.properties.osProfile.adminPassword -eq "[parameters('localAdminPassword')]" -and
+            $extension.properties.type -eq 'AADLoginForWindows' -and
+            $loginRole.properties.principalId -eq "[parameters('operatorObjectId')]" -and
+            $loginRole.properties.roleDefinitionId -match '1c0163c0-47e6-4577-8991-ea5c82e286e4') {
+            Pass 'jumpbox uses a generated secure password and operator-scoped Entra login'
+        } else { Fail 'jumpbox identity or generated-password configuration is incomplete' }
+    } catch {
+        Fail "jumpbox template inspection failed: $($_.Exception.Message)"
+    }
+}
+
 Push-Location $repoRoot
 try {
     Write-Host 'Azure DevOps hosted MCP through APIM validation' -ForegroundColor Cyan
@@ -83,10 +169,20 @@ try {
 
     $az = Get-Command az -ErrorAction SilentlyContinue
     if ($az) {
+        $reproArm = $null
         foreach ($file in Get-ChildItem (Join-Path $repoRoot 'infra') -Recurse -File -Filter '*.bicep') {
             $output = Join-Path $repoRoot "tests\.generated-$($file.BaseName).json"
-            try { Run $az.Source @('bicep','build','--file',$file.FullName,'--outfile',$output) "$(Rel $file.FullName) compiles as Bicep" }
+            try {
+                Run $az.Source @('bicep','build','--file',$file.FullName,'--outfile',$output) "$(Rel $file.FullName) compiles as Bicep"
+                if ($LASTEXITCODE -eq 0 -and $file.FullName -eq (Join-Path $repoRoot 'infra\repro\main.bicep')) {
+                    $reproArm = Text $output | ConvertFrom-Json -AsHashtable
+                }
+            }
             finally { Remove-Item $output -Force -ErrorAction SilentlyContinue }
+        }
+        if ($null -ne $reproArm) {
+            Test-ReproKeyVaultName $reproArm
+            Test-ReproJumpbox $reproArm
         }
     } else {
         Fail 'Azure CLI is required for Bicep compilation'

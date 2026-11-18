@@ -9,6 +9,7 @@
     "publisherEmail": { "value": "<publisher-email>" },
     "operatorObjectId": { "value": "<signed-in-user-object-id>" },
     "deployFoundation": { "value": true },
+    "deployJumpbox": { "value": false },
     "enablePrivateCaGateway": { "value": false },
     "skipModelDeployment": { "value": true }
   }
