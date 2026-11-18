@@ -67,14 +67,64 @@ $body = @{
         })
     }
 }
-$temporaryFile = [IO.Path]::GetTempFileName()
+$token = $null
+$headers = $null
 try {
-    [IO.File]::WriteAllText($temporaryFile, ($body | ConvertTo-Json -Depth 20))
-    & az rest --method patch `
-        --url "https://management.azure.com${AccountId}?api-version=$apiVersion" `
-        --body "@$temporaryFile" --output none
-    if ($LASTEXITCODE -ne 0) { throw 'Trust update failed. The new public CA secret version exists but is not confirmed active.' }
+    $token = & az account get-access-token --subscription $subscriptionId `
+        --resource 'https://management.azure.com/' --query accessToken -o tsv
+    if ($LASTEXITCODE -ne 0 -or -not $token) { throw 'Could not acquire an ARM access token.' }
+    $headers = @{ Authorization = "Bearer $token" }
+    $response = Invoke-WebRequest -Method Patch `
+        -Uri "https://management.azure.com${AccountId}?api-version=$apiVersion" `
+        -Headers $headers -ContentType 'application/json' `
+        -Body ($body | ConvertTo-Json -Depth 20 -Compress) -SkipHttpErrorCheck
+    if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) {
+        throw "Trust update failed (HTTP $($response.StatusCode))."
+    }
+    if ($response.StatusCode -eq 202) {
+        $operationUrl = @($response.Headers['Azure-AsyncOperation'])[0]
+        if (-not $operationUrl) { $operationUrl = @($response.Headers['Location'])[0] }
+        $operationUri = $null
+        if (-not [uri]::TryCreate($operationUrl, [UriKind]::Absolute, [ref]$operationUri) -or
+            $operationUri.Scheme -ne 'https' -or $operationUri.Host -ne 'management.azure.com') {
+            throw 'The trust update is pending, but ARM did not return a valid operation URL.'
+        }
+        $completed = $false
+        for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            $operation = Invoke-WebRequest -Method Get -Uri $operationUri.AbsoluteUri `
+                -Headers $headers -SkipHttpErrorCheck
+            if ($operation.StatusCode -lt 200 -or $operation.StatusCode -ge 300) {
+                throw "Could not check the trust update (HTTP $($operation.StatusCode))."
+            }
+            $operationBody = $operation.Content | ConvertFrom-Json
+            $status = $operationBody.status
+            if (-not $status) { $status = $operationBody.properties.provisioningState }
+            if ($status -eq 'Succeeded') { $completed = $true; break }
+            if ($status -in @('Failed', 'Canceled')) { throw "Trust update ended with status $status." }
+            Start-Sleep -Seconds 5
+        }
+        if (-not $completed) { throw 'Trust update is still pending after the monitoring window.' }
+    }
+    $updated = AzJson @('resource','show','--ids',$AccountId,'--api-version',$apiVersion,'-o','json')
+    $confirmed = @($updated.properties.trustedCertificateSources | Where-Object {
+        $_.type -eq 'AzureKeyVault' -and $_.resourceId -eq $vault.id
+    } | ForEach-Object { $_.certificateBundleReferences } | Where-Object {
+        $_.secretName -eq $SecretName -and $_.secretVersion -eq $version
+    })
+    if ($confirmed.Count -ne 1) { throw 'The version-pinned trust reference was not observed on the account.' }
+    $updatedReferences = @($updated.properties.trustedCertificateSources |
+        Where-Object { $_.type -eq 'AzureKeyVault' -and $_.resourceId -eq $vault.id } |
+        ForEach-Object { $_.certificateBundleReferences })
+    foreach ($reference in $references) {
+        if (@($updatedReferences | Where-Object {
+            $_.secretName -eq $reference.secretName -and $_.secretVersion -eq $reference.secretVersion
+        }).Count -ne 1) {
+            throw 'An expected existing CA reference was not observed after the update.'
+        }
+    }
+} catch {
+    throw "CA trust was not confirmed. The new public CA secret version may exist. $($_.Exception.Message)"
 } finally {
-    Remove-Item -LiteralPath $temporaryFile -Force
+    Remove-Variable token,headers -ErrorAction SilentlyContinue
 }
-Write-Host "Submitted the pinned trust reference for $SecretName. Allow propagation and rerun the tool test."
+Write-Host "Confirmed the pinned trust reference for $SecretName. Allow propagation and rerun the tool test."

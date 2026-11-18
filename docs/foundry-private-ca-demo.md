@@ -20,8 +20,27 @@ configure client-certificate authentication (mTLS).
 | Private jumpbox | Optionally access the private project from a Windows VM through Azure Bastion. |
 
 `initialize` and `tools/list` succeeding is not sufficient. The comparison must
-invoke `core_list_projects`. The README records a native-MCP failure with
-`VS30063`; treat that as a hypothesis to retest, not a hardcoded expected outcome.
+invoke `core_list_projects`.
+
+In one isolated deployment, the same delegated token successfully listed
+projects directly and through the APIM HTTP proxy, while the APIM-native MCP
+path returned `VS30063`. This observation predates the Foundry and private-CA
+tests; it does not establish the cause of the customer's failure. Retest it
+rather than treating it as a guaranteed outcome.
+
+In that deployment, two Foundry Prompt agents using separate OAuth connections
+also emitted consent requests. After the same user completed consent for each,
+the HTTP proxy's `core_list_projects` call completed without `VS30063`, while the
+APIM-native call returned `VS30063`. Both used the public-CA gateway hostname:
+this reproduces an authorization failure without testing private-CA trust or the
+playground's Sign-in button. The first consent attempt returned a consent-server
+error; a fresh request succeeded, but the reason for the earlier error is unknown.
+In a separate private-hostname control, the gateway certificate failed the
+system trust check and passed with the disposable CA. Foundry returned a generic
+HTTP 400 tool error before CA registration; after it accepted the version-pinned
+CA, the same OAuth connection completed `core_list_projects` without `VS30063`.
+The generic error did not identify TLS as its cause, so this is not proof of the
+customer's failure mechanism.
 
 ## Cost and networking
 
@@ -54,7 +73,11 @@ The demo does not change organizational access policies.
 
 With the jumpbox enabled, the template creates the VNet and its subnets before the
 Foundry foundation, which reuses them without replacing them. The agent and jumpbox
-subnets share outbound NAT so they can reach the internet-facing APIM gateway.
+subnets share outbound NAT intended to reach the internet-facing APIM gateway.
+Verify that connectivity explicitly: one deployment initially resolved the
+gateway name and allowed outbound traffic in its NSG, but the jumpbox could not
+establish a TCP connection. A later check reached the gateway over TCP and HTTPS;
+the cause of the earlier failure was not established.
 The jumpbox NSG allows inbound RDP only from the Bastion subnet. Ensure all four
 subnet ranges are non-overlapping and inside the VNet address space.
 
@@ -118,13 +141,16 @@ foundation. Check the current Foundry Standard Setup documentation. The template
 grants the operator Key Vault Secrets Officer and the Foundry account identity
 Key Vault Secrets User on the demo vault. When the jumpbox is enabled, it also
 grants the operator Foundry User on the demo project and Virtual Machine
-Administrator Login on the jumpbox. The vault is publicly reachable with
-Entra/RBAC authorization; do not use it to store customer or production secrets.
+Administrator Login on the jumpbox. The template requests public vault access
+with Entra/RBAC authorization; Azure Policy can override that setting. Do not
+use the vault for customer or production secrets.
 
 For runtime agent tests, explicitly set `skipModelDeployment` to `false` after
 checking model availability/quota. The default requested model is
 `gpt-4.1-mini`, version `2025-04-14`, GlobalStandard capacity 1. This is a
-deployment request, not a guarantee of regional capacity.
+deployment request, not a guarantee of regional capacity. Capacity 1 provides
+1,000 tokens per minute and can produce HTTP 429 during these agent tests; check
+the deployment's actual limits and available quota before increasing capacity.
 
 ```powershell
 az group create --subscription $subscription --name $rg --location westus3
@@ -167,7 +193,9 @@ RDP. The image does not install this repo's Python dependencies or Azure CLI;
 install approved tooling and obtain the repo inside the VM before running the
 diagnostic. Verify that the Foundry project hostname resolves to its private
 endpoint from the VM. The `mcp.repro.test` record resolves to APIM's **public**
-gateway IP, even though its DNS zone is private.
+gateway IP, even though its DNS zone is private. Verify TCP port 443 connectivity
+to the gateway before troubleshooting TLS or OAuth; successful DNS and an
+allowing NSG rule alone do not prove reachability.
 
 ## Demo 1: compare all three MCP paths
 
@@ -271,8 +299,13 @@ gateway deployment completes. Do not commit any private keys, PFX, parameter
 files containing secrets, or real diagnostic evidence.
 
 Rerun the gateway deployment command from the provisioning section after
-reviewing its what-if. Do not change the default public-CA hostname or remove
-existing trust. All of these commands target the dedicated demo environment.
+reviewing its what-if. Setting both deployment flags to `false` skips the
+foundation and jumpbox, but does not make the deployment hostname-only: the
+preview can also show changes to APIM APIs, policies, and other resources. Do not
+apply unexpected changes; use an appropriately reviewed targeted update
+instead. Preserve APIM custom properties and the default public-CA hostname,
+and do not remove existing Foundry trust. All commands target the dedicated demo
+environment.
 
 From the VNet-connected machine, verify that `mcp.repro.test` resolves to the
 APIM gateway IP. You can compare the private-CA paths directly by substituting
@@ -300,8 +333,33 @@ Register the public CA, first with `-WhatIf`, then explicitly without it:
 Allow propagation, then retry without changing the user or OAuth configuration.
 Foundry reads the public CA secret through its account identity. The trust script
 preserves other references in the same vault and refuses to replace a different
-vault/source. Coordinate account updates so no other writer races the merge.
-It does not delete old secret versions or alter OAuth settings.
+vault/source. It waits for the ARM operation to succeed and verifies the pinned
+reference; an accepted request alone is not confirmation. Coordinate account
+updates so no other writer races the merge. It does not delete old secret
+versions or alter OAuth settings.
+
+If vault public access is disabled, use an approved private endpoint and DNS
+path to upload the PEM. The optional `infra\repro\vault-private-endpoint.bicep`
+creates a vault private endpoint and a linked `privatelink.vaultcore.azure.net`
+zone in the demo resource group. It incurs additional charges. First check
+whether that DNS zone is already linked to the VNet; if so, use the existing
+zone instead of creating a conflicting link. Review the preview before creating:
+
+```powershell
+az deployment group what-if --subscription $subscription --resource-group $rg `
+  --template-file .\infra\repro\vault-private-endpoint.bicep `
+  --parameters vaultName="<keyVaultName-output>"
+az deployment group create --subscription $subscription --resource-group $rg `
+  --name ado-repro-vault-private-endpoint `
+  --template-file .\infra\repro\vault-private-endpoint.bicep `
+  --parameters vaultName="<keyVaultName-output>"
+```
+
+Upload from the VNet-connected jumpbox or another approved private client. The
+[private CA guidance](https://learn.microsoft.com/azure/foundry/agents/how-to/private-certificate-authority)
+also directs network-restricted vaults to allow trusted Microsoft services to
+bypass the firewall; the Foundry identity still requires Key Vault authorization.
+Get approval before changing the firewall, and keep public access disabled.
 
 If agent tool calls reach ADO and return `VS30063` only on the native endpoint,
 while the direct and HTTP-proxy controls work, investigate delegated-token

@@ -4,13 +4,17 @@ param([Parameter(Mandatory)][string]$PublicCaPem)
 $ErrorActionPreference = 'Stop'
 $accountId = '/subscriptions/test/resourceGroups/test/providers/Microsoft.CognitiveServices/accounts/test'
 $vaultId = '/subscriptions/test/resourceGroups/test/providers/Microsoft.KeyVault/vaults/test'
-$state = [pscustomobject]@{ CapturedBody = $null; Uploaded = $false; SourceVaultId = $vaultId }
+$state = [pscustomobject]@{ CapturedBody = $null; Uploaded = $false; SourceVaultId = $vaultId; OperationStatus = 'Succeeded' }
 
 # Function shadowing ensures this test never contacts Azure.
 function global:az {
     $global:LASTEXITCODE = 0
     switch ($args[0]) {
         'resource' {
+            if ($null -ne $state.CapturedBody -and $state.OperationStatus -eq 'Succeeded') {
+                $state.CapturedBody | ConvertTo-Json -Depth 20
+                break
+            }
             @{
                 properties = @{
                     trustedCertificateSources = @(@{
@@ -32,13 +36,27 @@ function global:az {
                 '"https://test.vault.azure.net/secrets/ado-repro-ca/new-version"'
             } else { throw 'Unexpected Key Vault invocation.' }
         }
-        'rest' {
-            $index = [array]::IndexOf($args, '--body')
-            if ($index -lt 0) { throw 'Missing request body.' }
-            $state.CapturedBody = Get-Content -LiteralPath $args[$index + 1].Substring(1) -Raw | ConvertFrom-Json
-        }
+        'account' { 'test-token' }
         default { throw "Unexpected Azure command: $($args[0])" }
     }
+}
+
+function global:Invoke-WebRequest {
+    param($Method, $Uri, $Headers, $ContentType, $Body, [switch]$SkipHttpErrorCheck)
+    if ($Method -eq 'Patch') {
+        $state.CapturedBody = $Body | ConvertFrom-Json
+        return [pscustomobject]@{
+            StatusCode = 202
+            Headers = @{ 'Azure-AsyncOperation' = 'https://management.azure.com/test-operation' }
+        }
+    }
+    if ($Method -eq 'Get') {
+        return [pscustomobject]@{
+            StatusCode = 200
+            Content = (@{ status = $state.OperationStatus } | ConvertTo-Json -Compress)
+        }
+    }
+    throw 'Unexpected HTTP invocation.'
 }
 
 try {
@@ -56,6 +74,17 @@ try {
     if (($references | Where-Object secretName -EQ 'ado-repro-ca').secretVersion -ne 'new-version') {
         throw 'The target secret version was not replaced.'
     }
+    $state.CapturedBody = $null
+    $state.OperationStatus = 'Failed'
+    $failed = $false
+    try {
+        & $scriptPath -AccountId $accountId -VaultName test -PublicCaPem $PublicCaPem -Confirm:$false
+    } catch {
+        if ($_.Exception.Message -notlike '*status Failed*') { throw }
+        $failed = $true
+    }
+    if (-not $failed) { throw 'A failed asynchronous update was reported as successful.' }
+    $state.OperationStatus = 'Succeeded'
     $state.SourceVaultId = "$vaultId-other"
     $state.Uploaded = $false
     $state.CapturedBody = $null
@@ -69,7 +98,8 @@ try {
     if (-not $rejected -or $state.Uploaded -or $null -ne $state.CapturedBody) {
         throw 'A different vault was not safely rejected before writes.'
     }
-    Write-Host 'Trust merge, WhatIf, and different-vault rejection passed without contacting Azure.'
+    Write-Host 'Trust merge, asynchronous failure, WhatIf, and different-vault rejection passed without contacting Azure.'
 } finally {
     Remove-Item Function:\global:az
+    Remove-Item Function:\global:Invoke-WebRequest
 }
